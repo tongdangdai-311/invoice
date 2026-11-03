@@ -1,0 +1,12 @@
+# Secrets
+.env
+
+# Company financial data: invoices, statements, debt tracker, portal photos
+docs/
+view-source*
+
+# Local files
+.vscode/
+__pycache__/
+*.pyc
+.venv/

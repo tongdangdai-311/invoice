@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>F.W. Webb Invoices</title>
+<style>
+  :root { --ink: #1c2024; --muted: #626b75; --line: #dde1e6; --bg: #f5f6f8; --accent: #1f5f8b; --bad: #a32020; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+  .back { display: inline-block; margin-bottom: 12px; color: var(--accent); }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
+  h1 { font-size: 22px; margin: 0 auto 0 0; }
+  button, .file-btn { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .6; cursor: default; }
+  .file-btn input { position: absolute; opacity: 0; width: 1px; }
+  .file-btn:focus-within, button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #log { display: none; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; margin: 0 0 18px; max-height: 220px; overflow: auto; white-space: pre-wrap; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  #search { width: min(340px, 100%); font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+  #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #message { color: var(--bad); margin: 0 0 12px; }
+  #message:empty { display: none; }
+  .table-wrap { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .toggle { padding: 2px 8px; font-size: 13px; color: var(--accent); white-space: nowrap; }
+  .memo { width: 100%; min-width: 180px; font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; }
+  .items-row > td { background: #fafbfc; padding: 4px 12px 14px 40px; }
+  .items th { font-size: 12px; color: var(--muted); }
+  .items td, .items th { padding: 5px 10px; }
+  .empty { padding: 44px 20px; text-align: center; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="/">&larr; All suppliers</a>
+  <header>
+    <h1>F.W. Webb Invoices</h1>
+    <label class="file-btn">Import CSV<input id="file" type="file" accept=".csv,.txt,text/csv"></label>
+    <button id="scrape" class="primary">Scrape invoices</button>
+  </header>
+
+  <pre id="log" aria-live="polite"></pre>
+  <p id="message" role="alert"></p>
+
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search order, job, memo or item" aria-label="Search invoices">
+    <div id="summary"></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty" hidden></div>
+  </div>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+let orders = [];
+const open = new Set();
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+
+function showMessage(text) { $("message").textContent = text || ""; }
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Request failed (${response.status})`);
+  return body;
+}
+
+function matches(order, query) {
+  const haystack = [order.order_id, order.job_name, order.memo,
+    ...order.items.flatMap((i) => [i.product, i.description])].join(" ").toLowerCase();
+  return haystack.includes(query);
+}
+
+function itemsTable(order) {
+  const head = el("tr", {}, ...["Product", "Description", "Qty", "Price", "Per/UOM", "Ext. price"].map((h, i) =>
+    el("th", { textContent: h, className: i >= 2 && i !== 4 ? "num" : "" })));
+  const body = order.items.map((item) => el("tr", {},
+    el("td", { textContent: item.product }),
+    el("td", { textContent: item.description }),
+    el("td", { textContent: item.qty, className: "num" }),
+    el("td", { textContent: item.unit_price, className: "num" }),
+    el("td", { textContent: item.uom }),
+    el("td", { textContent: money(item.ext_cents), className: "num" })));
+  return el("table", { className: "items" }, el("thead", {}, head), el("tbody", {}, ...body));
+}
+
+function memoInput(order) {
+  const input = el("input", { className: "memo", value: order.memo, placeholder: "Add a memo" });
+  input.setAttribute("aria-label", `Memo for order ${order.order_id}`);
+  input.addEventListener("change", async () => {
+    try {
+      await api(`/api/orders/${encodeURIComponent(order.order_id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ memo: input.value }),
+      });
+      order.memo = input.value.trim();
+      showMessage("");
+    } catch (error) {
+      showMessage(`Memo not saved for order ${order.order_id}: ${error.message}`);
+    }
+  });
+  return input;
+}
+
+function render() {
+  const query = $("search").value.trim().toLowerCase();
+  const visible = orders.filter((order) => matches(order, query));
+  const rows = [];
+  for (const order of visible) {
+    const isOpen = open.has(order.order_id);
+    const toggle = el("button", { className: "toggle", textContent: isOpen ? "Hide" : "Items" });
+    toggle.setAttribute("aria-expanded", isOpen);
+    toggle.addEventListener("click", () => {
+      isOpen ? open.delete(order.order_id) : open.add(order.order_id);
+      render();
+    });
+    rows.push(el("tr", {},
+      el("td", {}, toggle),
+      el("td", { textContent: order.order_id }),
+      el("td", { textContent: order.job_name }),
+      el("td", {}, memoInput(order)),
+      el("td", { textContent: order.items.length, className: "num" }),
+      el("td", { textContent: money(order.total_cents), className: "num" })));
+    if (isOpen) {
+      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 6 }, itemsTable(order))));
+    }
+  }
+  $("rows").replaceChildren(...rows);
+  $("summary").textContent = `${visible.length} ${visible.length === 1 ? "order" : "orders"}, ${money(visible.reduce((sum, o) => sum + o.total_cents, 0))}`;
+  $("empty").hidden = visible.length > 0;
+  $("empty").textContent = orders.length
+    ? "No orders match your search."
+    : "No invoices yet. Use Scrape invoices to sign in to F.W. Webb and download them.";
+}
+
+async function load() {
+  try {
+    orders = await api("/api/orders");
+    render();
+  } catch (error) {
+    showMessage(`Could not load invoices: ${error.message}`);
+  }
+}
+
+function showLog(status) {
+  $("log").style.display = status.log.length || status.running ? "block" : "none";
+  $("log").textContent = status.log.join("\n") || "Starting...";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+
+async function pollScrape() {
+  const status = await api("/api/scrape");
+  showLog(status);
+  $("scrape").disabled = status.running;
+  $("scrape").textContent = status.running ? "Scraping..." : "Scrape invoices";
+  if (status.running) {
+    setTimeout(() => pollScrape().catch((e) => showMessage(e.message)), 1500);
+    return;
+  }
+  if (status.exit_code) showMessage("The scrape did not finish cleanly. See the log above.");
+  load();
+}
+
+$("scrape").addEventListener("click", async () => {
+  showMessage("");
+  try {
+    await api("/api/scrape", { method: "POST" });
+    await pollScrape();
+  } catch (error) {
+    showMessage(error.message);
+  }
+});
+
+$("file").addEventListener("change", async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    await api("/api/import", { method: "POST", body: form });
+    showMessage("");
+    load();
+  } catch (error) {
+    showMessage(`Could not import ${file.name}: ${error.message}`);
+  }
+});
+
+$("search").addEventListener("input", render);
+pollScrape().catch((e) => showMessage(e.message));
+</script>
+</body>
+</html>

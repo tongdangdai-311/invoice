@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+playwright
+python-multipart
+pymysql
+python-dotenv
