@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in | Invoice Management</title>
+<style>
+  :root { --ink: #1c2024; --muted: #626b75; --line: #dde1e6; --bg: #f5f6f8; --accent: #1f5f8b; --bad: #a32020; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 380px; margin: 0 auto; padding: 96px 20px; }
+  h1 { font-size: 24px; margin: 0 0 20px; }
+  form { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 22px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  input { width: 100%; font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; margin-bottom: 14px; }
+  button { width: 100%; font: inherit; font-weight: 600; padding: 9px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #error { color: var(--bad); margin: 0 0 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Invoice Management</h1>
+  <form method="post" action="/login">
+    <p id="error" role="alert" hidden>Wrong password, or no password has been set for this site yet.</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required autofocus>
+    <button type="submit">Sign in</button>
+  </form>
+</main>
+<script>
+  document.getElementById("error").hidden = !new URLSearchParams(location.search).has("error");
+</script>
+</body>
+</html>

@@ -6,6 +6,10 @@ When we click into that, it would have a spreadsheet of csv, like the sample in 
 
 The Link to log-in page is in ./docs/url.txt
 
+# MAIN function of the app.
+
+
+
 
 
 
