@@ -12,7 +12,7 @@ from pathlib import Path
 import pymysql
 from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app import memo_ai, store
 from app.scraper import SIGN_IN_NEEDED, SIGNED_IN
@@ -99,6 +99,12 @@ class DueDateUpdate(BaseModel):
     due_on: date | None  # null clears it
 
 
+class Payment(BaseModel):
+    paid_on: date
+    card: str = Field(pattern=r"^\d{4}$")  # Last 4 digits only, never the full number.
+    paid_by: str = Field(min_length=1, max_length=100)
+
+
 def _session_token(password: str) -> bytes:
     # Derived from the password, so changing APP_PASSWORD signs everyone out.
     digest = hmac.new(password.encode(), b"invoice-session", hashlib.sha256).hexdigest()
@@ -179,9 +185,31 @@ def fw_webb() -> FileResponse:
     return FileResponse(FRONTEND / "fw_webb.html")
 
 
+@app.get("/fw-webb/paid", include_in_schema=False)
+def fw_webb_paid() -> FileResponse:
+    return FileResponse(FRONTEND / "fw_webb.html")  # Same page; it switches to paid mode by URL.
+
+
 @app.get("/api/orders")
-def get_orders() -> list[dict]:
-    return store.list_orders()
+def get_orders(paid: bool = False) -> list[dict]:
+    return store.list_orders(paid)
+
+
+@app.put("/api/orders/{order_id}/payment")
+def mark_paid(order_id: str, payment: Payment) -> dict:
+    paid_by = payment.paid_by.strip()
+    if not paid_by:
+        raise HTTPException(400, "Enter who paid")
+    if not store.mark_paid(order_id, payment.paid_on, payment.card, paid_by):
+        raise HTTPException(404, "Order not found")
+    return {"order_id": order_id, "paid_on": payment.paid_on, "card": payment.card, "paid_by": paid_by}
+
+
+@app.delete("/api/orders/{order_id}/payment")
+def mark_unpaid(order_id: str) -> dict:
+    if not store.mark_unpaid(order_id):
+        raise HTTPException(404, "Order not found")
+    return {"order_id": order_id}
 
 
 @app.post("/api/orders/{order_id}/suggest-memo")

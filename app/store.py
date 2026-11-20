@@ -35,6 +35,9 @@ SCHEMA = (
         imported_at DATETIME NOT NULL,
         purchased_on DATE NULL,
         due_on DATE NULL,
+        paid_on DATE NULL,
+        paid_card CHAR(4) NULL,
+        paid_by VARCHAR(100) NULL,
         INDEX idx_invoice_id (invoice_id)
     ) CHARACTER SET utf8mb4
     """,
@@ -54,6 +57,15 @@ SCHEMA = (
 )
 
 _schema_ready = False
+
+# Columns added after the first release; older databases get them on startup.
+ADDED_COLUMNS = {
+    "purchased_on": "DATE NULL",
+    "due_on": "DATE NULL",
+    "paid_on": "DATE NULL",
+    "paid_card": "CHAR(4) NULL",
+    "paid_by": "VARCHAR(100) NULL",
+}
 
 # Invoices are due this many days after the purchase date.
 PAYMENT_TERMS_DAYS = 60
@@ -91,10 +103,10 @@ def _cursor():
                 for statement in SCHEMA:
                     cursor.execute(statement)
                 # Databases created before these columns existed need them added.
-                for column in ("purchased_on", "due_on"):
+                for column, definition in ADDED_COLUMNS.items():
                     cursor.execute("SHOW COLUMNS FROM orders LIKE %s", (column,))
                     if not cursor.fetchone():
-                        cursor.execute(f"ALTER TABLE orders ADD COLUMN {column} DATE NULL")
+                        cursor.execute(f"ALTER TABLE orders ADD COLUMN {column} {definition}")
                 _schema_ready = True
             yield cursor
         conn.commit()
@@ -216,11 +228,18 @@ def known_invoice_ids() -> set[str]:
         return {row["invoice_id"] for row in cursor.fetchall()}
 
 
-def list_orders() -> list[dict]:
+def list_orders(paid: bool = False) -> list[dict]:
+    """Unpaid orders, newest first; or paid ones, most recently paid first."""
+    if paid:
+        where, order_by = "paid_on IS NOT NULL", "paid_on DESC, order_id DESC"
+    else:
+        where, order_by = "paid_on IS NULL", "imported_at DESC, order_id DESC"
     with _cursor() as cursor:
-        cursor.execute("SELECT * FROM orders ORDER BY imported_at DESC, order_id DESC")
+        cursor.execute(f"SELECT * FROM orders WHERE {where} ORDER BY {order_by}")
         orders = {row["order_id"]: {**row, "items": []} for row in cursor.fetchall()}
-        cursor.execute("SELECT * FROM items ORDER BY id")
+        cursor.execute(
+            f"SELECT items.* FROM items JOIN orders USING (order_id) WHERE {where} ORDER BY items.id"
+        )
         for row in cursor.fetchall():
             orders[row["order_id"]]["items"].append(row)
     return list(orders.values())
@@ -240,6 +259,24 @@ def set_due_date(order_id: str, due_on: date | None) -> bool:
     """Typed in by hand for now; imports and scrapes never change it."""
     with _cursor() as cursor:
         return cursor.execute("UPDATE orders SET due_on = %s WHERE order_id = %s", (due_on, order_id)) > 0
+
+
+def mark_paid(order_id: str, paid_on: date, card: str, paid_by: str) -> bool:
+    """Record a payment. Scrapes and imports never change these fields."""
+    with _cursor() as cursor:
+        return cursor.execute(
+            "UPDATE orders SET paid_on = %s, paid_card = %s, paid_by = %s WHERE order_id = %s",
+            (paid_on, card, paid_by, order_id),
+        ) > 0
+
+
+def mark_unpaid(order_id: str) -> bool:
+    """Undo mark_paid, sending the order back to the invoice list."""
+    with _cursor() as cursor:
+        return cursor.execute(
+            "UPDATE orders SET paid_on = NULL, paid_card = NULL, paid_by = NULL WHERE order_id = %s",
+            (order_id,),
+        ) > 0
 
 
 def set_memo(order_id: str, memo: str) -> bool:

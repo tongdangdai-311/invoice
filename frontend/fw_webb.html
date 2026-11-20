@@ -11,7 +11,21 @@
   main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
   .back { display: inline-block; margin-bottom: 12px; color: var(--accent); }
   header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
-  h1 { font-size: 22px; margin: 0 auto 0 0; }
+  .title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-right: auto; }
+  h1 { font-size: 22px; margin: 0; }
+  .link-btn { font-size: 13px; padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--accent); text-decoration: none; }
+  .link-btn:hover { border-color: var(--accent); }
+  .row-action { padding: 3px 10px; font-size: 13px; white-space: nowrap; }
+  .row-action:hover { border-color: var(--ink); }
+  .mark-paid:hover, button.paid-confirm { background: var(--good); border-color: var(--good); color: #fff; }
+  .card { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .order-id { white-space: nowrap; }
+  body.paid main { max-width: 1440px; }  /* Room for the card, payer and date columns. */
+  .field { display: block; margin: 0 0 14px; }
+  .field span { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  .field input { width: 100%; font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
+  .form-error { color: var(--bad); font-size: 13px; margin: -4px 0 12px; }
+  .form-error:empty { display: none; }
   button, .file-btn { font: inherit; padding: 7px 14px; border-radius: 6px; border: 1px solid var(--line); background: #fff; color: var(--ink); cursor: pointer; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button:disabled { opacity: .6; cursor: default; }
@@ -23,7 +37,7 @@
   #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
   #message { color: var(--bad); margin: 0 0 12px; }
   #message.ok { color: var(--good); }
-  dialog { max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 22px; color: var(--ink); }
+  dialog { width: min(420px, calc(100% - 32px)); max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 22px; color: var(--ink); }
   dialog::backdrop { background: rgb(0 0 0 / .35); }
   dialog h2 { font-size: 18px; margin: 0 0 8px; }
   dialog p { margin: 0 0 18px; color: var(--muted); }
@@ -58,10 +72,13 @@
 </head>
 <body>
 <main>
-  <a class="back" href="/">&larr; All suppliers</a>
+  <a id="back" class="back" href="/">&larr; All suppliers</a>
   <header>
-    <h1>F.W. Webb Invoices</h1>
-    <label class="file-btn"><span id="file-label">Import CSV</span><input id="file" type="file" accept=".csv,.txt,text/csv"></label>
+    <div class="title">
+      <h1 id="title">F.W. Webb Invoices</h1>
+      <a id="paid-link" class="link-btn" href="/fw-webb/paid">Paid invoices</a>
+    </div>
+    <label id="import" class="file-btn"><span id="file-label">Import CSV</span><input id="file" type="file" accept=".csv,.txt,text/csv"></label>
     <button id="scrape" class="primary">Scrape invoices</button>
   </header>
 
@@ -76,7 +93,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th><th class="date-col">Date purchased</th><th>Due date</th></tr>
+        <tr id="head"></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -93,11 +110,34 @@
   </div>
 </dialog>
 
+<dialog id="pay-dialog" aria-labelledby="pay-title">
+  <form id="pay-form" novalidate>
+    <h2 id="pay-title">Mark order paid</h2>
+    <p id="pay-summary"></p>
+    <label class="field"><span>Paid by card (last 4 digits)</span>
+      <input id="pay-card" inputmode="numeric" autocomplete="off" placeholder="1234" required></label>
+    <label class="field"><span>Paid by</span>
+      <input id="pay-by" maxlength="100" list="payers" placeholder="Who paid" required></label>
+    <datalist id="payers"></datalist>
+    <label class="field"><span>Date paid</span>
+      <input id="pay-date" type="date" required></label>
+    <p id="pay-error" class="form-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button id="pay-cancel" type="button">Cancel</button>
+      <button id="pay-save" type="submit" class="paid-confirm">Mark paid</button>
+    </div>
+  </form>
+</dialog>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 let orders = [];
 const open = new Set();
+// The same page shows unpaid invoices at /fw-webb and paid ones at /fw-webb/paid.
+const PAID = location.pathname.replace(/\/$/, "").endsWith("/paid");
+const COLUMNS = ["", "Order ID", "Job name", "Memo", "Items", "Total price", "Date purchased", "Due date",
+  ...(PAID ? ["Card", "Paid by", "Date paid", ""] : [""])];
 
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
@@ -122,7 +162,7 @@ async function api(path, options) {
 }
 
 function matches(order, query) {
-  const haystack = [order.order_id, order.job_name, order.memo,
+  const haystack = [order.order_id, order.job_name, order.memo, order.paid_by || "",
     ...order.items.flatMap((i) => [i.product, i.description])].join(" ").toLowerCase();
   return haystack.includes(query);
 }
@@ -177,6 +217,7 @@ function dueStatus(order) {
 }
 
 function dueDateCell(order) {
+  if (PAID) return el("td", { textContent: formatDay(order.due_on) || "—", className: "date" });
   const status = dueStatus(order);
   const cell = el("td", {}, dueDateInput(order));
   if (status) cell.append(el("span", { className: `due-note ${status.cls}`, textContent: status.text }));
@@ -242,6 +283,109 @@ function memoInput(order) {
   return el("div", { className: "memo-cell" }, input, suggest);
 }
 
+function paidCells(order) {
+  const undo = el("button", { className: "row-action", textContent: "Move back" });
+  undo.title = "Mark unpaid and move it back to the invoice list";
+  undo.addEventListener("click", async () => {
+    if (!confirm(`Move order ${order.order_id} back to unpaid invoices? Its payment details will be removed.`)) return;
+    try {
+      await api(`/api/orders/${encodeURIComponent(order.order_id)}/payment`, { method: "DELETE" });
+      orders = orders.filter((o) => o !== order);
+      render();
+      showMessage(`Order ${order.order_id} moved back to the invoice list.`, true);
+    } catch (error) {
+      showMessage(`Could not move order ${order.order_id}: ${error.message}`);
+    }
+  });
+  return [
+    el("td", { textContent: order.paid_card ? `•••• ${order.paid_card}` : "—", className: "card" }),
+    el("td", { textContent: order.paid_by || "—" }),
+    el("td", { textContent: formatDay(order.paid_on) || "—", className: "date" }),
+    el("td", {}, undo),
+  ];
+}
+
+function todayIso() {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+let paying = null;  // The order the payment box is open for.
+
+function markPaidButton(order) {
+  const button = el("button", { className: "row-action mark-paid", textContent: "✓ Mark paid" });
+  button.setAttribute("aria-label", `Mark order ${order.order_id} paid`);
+  button.addEventListener("click", () => {
+    paying = order;
+    $("pay-summary").textContent = `Order ${order.order_id}${order.job_name ? ` · ${order.job_name}` : ""} · ${money(order.total_cents)}`;
+    $("pay-card").value = "";
+    $("pay-date").value = todayIso();
+    $("pay-error").textContent = "";
+    $("pay-save").disabled = false;
+    showPayers();
+    $("pay-dialog").showModal();
+    $("pay-card").focus();
+  });
+  return button;
+}
+
+$("pay-card").addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(-4); });  // A pasted full number keeps only its last 4.
+$("pay-cancel").addEventListener("click", () => $("pay-dialog").close());
+$("pay-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const card = $("pay-card").value, paidBy = $("pay-by").value.trim(), paidOn = $("pay-date").value;
+  const problem = !/^\d{4}$/.test(card) ? "Enter the last 4 digits of the card."
+    : !paidBy ? "Enter who paid." : !paidOn ? "Pick the date it was paid." : "";
+  if (problem) { $("pay-error").textContent = problem; return; }
+  const order = paying;
+  $("pay-save").disabled = true;
+  try {
+    await api(`/api/orders/${encodeURIComponent(order.order_id)}/payment`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ card, paid_by: paidBy, paid_on: paidOn }),
+    });
+    rememberPayer(paidBy);
+    $("pay-dialog").close();
+    orders = orders.filter((o) => o !== order);
+    render();
+    showMessage(`Order ${order.order_id} marked paid and moved to Paid invoices.`, true);
+  } catch (error) {
+    $("pay-error").textContent = `Not saved: ${error.message}`;
+    $("pay-save").disabled = false;
+  }
+});
+
+// Names used before on this computer, offered as suggestions in "Paid by".
+function payers() {
+  try { return JSON.parse(localStorage.getItem("payers") || "[]"); } catch { return []; }
+}
+function rememberPayer(name) {
+  const list = [name, ...payers().filter((n) => n !== name)].slice(0, 10);
+  try { localStorage.setItem("payers", JSON.stringify(list)); } catch {}
+}
+function showPayers() {
+  $("payers").replaceChildren(...payers().map((name) => el("option", { value: name })));
+  if (!$("pay-by").value && payers()[0]) $("pay-by").value = payers()[0];
+}
+
+function setUpMode() {
+  $("head").replaceChildren(...COLUMNS.map((name) => el("th", {
+    textContent: name,
+    className: name === "Items" || name === "Total price" ? "num" : name === "Date purchased" ? "date-col" : "",
+  })));
+  if (!PAID) return;
+  document.body.classList.add("paid");
+  document.title = "F.W. Webb Paid Invoices";
+  $("title").textContent = "F.W. Webb Paid Invoices";
+  $("back").href = "/fw-webb";
+  $("back").textContent = "← Invoice list";
+  $("paid-link").hidden = true;
+  $("import").hidden = true;
+  $("scrape").hidden = true;
+  $("search").placeholder = "Search order, job, memo, item or who paid";
+}
+
 function render() {
   const query = $("search").value.trim().toLowerCase();
   const visible = orders.filter((order) => matches(order, query));
@@ -254,9 +398,9 @@ function render() {
       isOpen ? open.delete(order.order_id) : open.add(order.order_id);
       render();
     });
-    rows.push(el("tr", { className: dueStatus(order)?.cls || "" },
+    rows.push(el("tr", { className: PAID ? "" : dueStatus(order)?.cls || "" },
       el("td", {}, toggle),
-      el("td", { textContent: order.order_id }),
+      el("td", { textContent: order.order_id, className: "order-id" }),
       el("td", { textContent: order.job_name }),
       el("td", {}, memoInput(order)),
       el("td", { textContent: order.items.length, className: "num" }),
@@ -268,9 +412,10 @@ function render() {
           : `Purchase date unknown (imported from a CSV). Added here ${formatDateTime(order.imported_at)}`,
         className: "date",
       }),
-      dueDateCell(order)));
+      dueDateCell(order),
+      ...(PAID ? paidCells(order) : [el("td", {}, markPaidButton(order))])));
     if (isOpen) {
-      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 8 }, itemsTable(order))));
+      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: COLUMNS.length }, itemsTable(order))));
     }
   }
   $("rows").replaceChildren(...rows);
@@ -278,12 +423,14 @@ function render() {
   $("empty").hidden = visible.length > 0;
   $("empty").textContent = orders.length
     ? "No orders match your search."
-    : "No invoices yet. Use Scrape invoices to sign in to F.W. Webb and download them.";
+    : PAID
+      ? "No paid invoices yet. Use Mark paid on the invoice list to move an invoice here."
+      : "No unpaid invoices. Use Scrape invoices to sign in to F.W. Webb and download new ones.";
 }
 
 async function load() {
   try {
-    orders = await api("/api/orders");
+    orders = await api(`/api/orders?paid=${PAID}`);
     render();
   } catch (error) {
     showMessage(`Could not load invoices: ${error.message}`);
@@ -370,7 +517,9 @@ $("file").addEventListener("change", async (event) => {
 });
 
 $("search").addEventListener("input", render);
-pollScrape().catch((e) => showMessage(e.message));
+setUpMode();
+if (PAID) load();
+else pollScrape().catch((e) => showMessage(e.message));
 </script>
 </body>
 </html>
