@@ -14,13 +14,15 @@ from dotenv import load_dotenv
 from pymysql.constants import CLIENT
 from pymysql.cursors import DictCursor
 
-# Kept outside OneDrive: this folder holds the database password, downloaded
-# invoices and the browser profile with portal login cookies.
+# Kept outside OneDrive: this folder holds downloaded invoices and the browser
+# profile with portal login cookies.
 DATA_DIR = Path(
     os.environ.get("INVOICE_DATA_DIR")
     or Path(os.environ.get("LOCALAPPDATA", Path.home())) / "InvoiceManagement"
 )
-load_dotenv(DATA_DIR / ".env")  # A real DATABASE_URL environment variable takes priority.
+# Real environment variables (set on the server) win, then app/.env, then the AppData copy.
+load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(DATA_DIR / ".env")
 
 SCHEMA = (
     """
@@ -52,13 +54,17 @@ SCHEMA = (
 _schema_ready = False
 
 
+class DatabaseNotConfigured(RuntimeError):
+    """DATABASE_URL is missing."""
+
+
 @contextmanager
 def _cursor():
     """Yield a cursor in one transaction: commit on success, roll back on error."""
     global _schema_ready
     url = os.environ.get("DATABASE_URL")
     if not url:
-        raise RuntimeError(f"DATABASE_URL is not set. Add it to {DATA_DIR / '.env'}")
+        raise DatabaseNotConfigured("DATABASE_URL is not set")
     parsed = urlparse(url)
     conn = pymysql.connect(
         host=parsed.hostname,
@@ -90,12 +96,14 @@ def _cursor():
 
 
 def _decode(raw: bytes) -> str:
+    if raw[:2] == b"PK":  # Excel .xlsx files are zip archives.
+        raise ValueError("This is an Excel file. Save it as CSV and import that instead.")
     if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return raw.decode("utf-16")
     try:
         return raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        return raw.decode("cp1252")
+        return raw.decode("cp1252", errors="replace")
 
 
 def _to_cents(value: str) -> int:
@@ -115,7 +123,7 @@ def parse_csv(raw: bytes) -> list[dict]:
     """Turn an exported file into one dict per order, with its line items."""
     text = _decode(raw)
     first_line = text.split("\n", 1)[0]
-    delimiter = "\t" if "\t" in first_line else ","
+    delimiter = max("\t,;", key=first_line.count)  # Portal uses tabs; Excel may re-save differently.
     reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
     reader.fieldnames = [(name or "").strip().lower() for name in reader.fieldnames or []]
 
@@ -194,6 +202,16 @@ def list_orders() -> list[dict]:
         for row in cursor.fetchall():
             orders[row["order_id"]]["items"].append(row)
     return list(orders.values())
+
+
+def get_order(order_id: str) -> dict | None:
+    with _cursor() as cursor:
+        cursor.execute("SELECT * FROM orders WHERE order_id = %s", (order_id,))
+        order = cursor.fetchone()
+        if order is None:
+            return None
+        cursor.execute("SELECT * FROM items WHERE order_id = %s ORDER BY id", (order_id,))
+        return {**order, "items": cursor.fetchall()}
 
 
 def set_memo(order_id: str, memo: str) -> bool:

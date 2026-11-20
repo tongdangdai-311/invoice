@@ -1,17 +1,22 @@
 """Invoice Management web app. Run with: python -m uvicorn app.main:app"""
+import hashlib
+import hmac
 import os
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+import pymysql
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app import store
+from app import memo_ai, store
 
 ROOT = Path(__file__).resolve().parent.parent
+SESSION_COOKIE = "invoice_session"
 
 app = FastAPI(title="Invoice Management")
 
@@ -66,6 +71,76 @@ class MemoUpdate(BaseModel):
     memo: str
 
 
+def _session_token(password: str) -> bytes:
+    # Derived from the password, so changing APP_PASSWORD signs everyone out.
+    digest = hmac.new(password.encode(), b"invoice-session", hashlib.sha256).hexdigest()
+    return digest.encode()
+
+
+def _logged_in(request: Request) -> bool:
+    password = os.environ.get("APP_PASSWORD")  # Unset means nobody can sign in.
+    cookie = request.cookies.get(SESSION_COOKIE, "")
+    return bool(password) and hmac.compare_digest(cookie.encode(), _session_token(password))
+
+
+@app.exception_handler(store.DatabaseNotConfigured)
+def database_not_configured(request: Request, error: Exception) -> JSONResponse:
+    return JSONResponse(
+        {"detail": "The database is not connected yet: DATABASE_URL is not set on this server."},
+        status_code=503,
+    )
+
+
+@app.exception_handler(pymysql.MySQLError)
+def database_error(request: Request, error: Exception) -> JSONResponse:
+    if isinstance(error, pymysql.err.DataError):
+        return JSONResponse({"detail": "A value in this file is too long to save."}, status_code=400)
+    return JSONResponse(
+        {"detail": "Could not reach the database. Please try again shortly."}, status_code=503
+    )
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if request.url.path == "/login" or _logged_in(request):
+        return await call_next(request)
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "Sign in required"}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+@app.get("/login", include_in_schema=False)
+def login_page() -> FileResponse:
+    return FileResponse(Path(__file__).parent / "static" / "login.html")
+
+
+@app.post("/login", include_in_schema=False)
+def login(request: Request, password: str = Form("")) -> RedirectResponse:
+    expected = os.environ.get("APP_PASSWORD")
+    if not expected or not hmac.compare_digest(password.encode(), expected.encode()):
+        time.sleep(1)  # Slows down password guessing.
+        return RedirectResponse("/login?error=1", status_code=303)
+
+    response = RedirectResponse("/", status_code=303)
+    forwarded_proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    response.set_cookie(
+        SESSION_COOKIE,
+        _session_token(expected).decode(),
+        max_age=14 * 24 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+        secure=forwarded_proto == "https",
+    )
+    return response
+
+
+@app.post("/logout", include_in_schema=False)
+def logout() -> RedirectResponse:
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
     return FileResponse(Path(__file__).parent / "static" / "index.html")
@@ -79,6 +154,19 @@ def fw_webb() -> FileResponse:
 @app.get("/api/orders")
 def get_orders() -> list[dict]:
     return store.list_orders()
+
+
+@app.post("/api/orders/{order_id}/suggest-memo")
+def suggest_memo(order_id: str) -> dict:
+    order = store.get_order(order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if not order["items"]:
+        raise HTTPException(400, "This order has no items to describe")
+    try:
+        return {"memo": memo_ai.suggest_memo(order)}
+    except memo_ai.MemoUnavailable as error:
+        raise HTTPException(503, str(error)) from None
 
 
 @app.patch("/api/orders/{order_id}")
@@ -95,7 +183,16 @@ def import_csv(file: UploadFile) -> dict:
     except ValueError as error:
         raise HTTPException(400, str(error)) from None
     store.save_orders(orders)
-    return {"imported": [order["order_id"] for order in orders]}
+    return {
+        "imported": [
+            {
+                "order_id": order["order_id"],
+                "items": len(order["items"]),
+                "total_cents": order["total_cents"],
+            }
+            for order in orders
+        ]
+    }
 
 
 @app.post("/api/scrape", status_code=202)

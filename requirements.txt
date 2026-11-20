@@ -4,3 +4,4 @@ playwright
 python-multipart
 pymysql
 python-dotenv
+anthropic

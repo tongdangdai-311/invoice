@@ -18,6 +18,7 @@
   .card p { margin: 0 0 14px; color: var(--muted); }
   .open { color: var(--accent); font-weight: 600; }
   .portal { display: inline-block; margin-top: 14px; color: var(--accent); }
+  .signout { margin-top: 28px; padding: 0; border: 0; background: none; font: inherit; color: var(--muted); text-decoration: underline; cursor: pointer; }
 </style>
 </head>
 <body>
@@ -30,6 +31,7 @@
     <span class="open">Open invoices &rarr;</span>
   </a>
   <a class="portal" href="https://www.fwwebb.com/wobf/payyourbill" target="_blank" rel="noopener">Go to the F.W. Webb website</a>
+  <form method="post" action="/logout"><button class="signout" type="submit">Sign out</button></form>
 </main>
 </body>
 </html>
