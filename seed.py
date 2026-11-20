@@ -19,7 +19,7 @@ from pathlib import Path
 
 from faker import Faker
 
-from app.store import _cursor, parse_csv
+from app.store import PAYMENT_TERMS_DAYS, _cursor, parse_csv
 
 SAMPLE = Path(__file__).parent / "docs" / "sample" / "csv_sample.csv"
 PREFIX = "SEED-"
@@ -71,11 +71,10 @@ def make_orders(count: int, fake: Faker, catalog: list[dict], due: str | None = 
     for n in range(count):
         if due:
             due_on = date.today() + timedelta(days=random.randint(*DUE_RANGES[due]))
-            purchased_on = due_on - timedelta(days=30)
+            purchased_on = due_on - timedelta(days=PAYMENT_TERMS_DAYS)
         else:
             purchased_on = fake.date_between(start_date="-365d", end_date="today")
-            # Net 30, but leave some blank since due dates are typed in by hand.
-            due_on = purchased_on + timedelta(days=30) if random.random() < 0.7 else None
+            due_on = purchased_on + timedelta(days=PAYMENT_TERMS_DAYS)
         items = []
         for product in random.sample(catalog, k=random.randint(1, min(12, len(catalog)))):
             qty = random.choice([1, 2, 3, 5, 6, 10, 15, 25, 40, 48, 100])

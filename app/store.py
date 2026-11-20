@@ -55,6 +55,9 @@ SCHEMA = (
 
 _schema_ready = False
 
+# Invoices are due this many days after the purchase date.
+PAYMENT_TERMS_DAYS = 60
+
 
 class DatabaseNotConfigured(RuntimeError):
     """DATABASE_URL is missing."""
@@ -171,24 +174,29 @@ def save_orders(
     orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None
 ) -> None:
     """Insert or refresh orders. A memo the user already wrote is never overwritten,
-    and a known purchase date is kept when a CSV import has none."""
+    and a known purchase date is kept when a CSV import has none. A missing due date
+    is filled in as the purchase date plus PAYMENT_TERMS_DAYS; one already set
+    (including one typed in by hand) is kept."""
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
     with _cursor() as cursor:
         for order in orders:
             cursor.execute(
                 """
                 INSERT INTO orders
-                    (order_id, invoice_id, job_name, memo, total_cents, imported_at, purchased_on)
-                VALUES (%s, %s, %s, '', %s, %s, %s) AS new
+                    (order_id, invoice_id, job_name, memo, total_cents, imported_at,
+                     purchased_on, due_on)
+                VALUES (%s, %s, %s, '', %s, %s, %s, %s + INTERVAL %s DAY) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
                     total_cents = new.total_cents,
-                    purchased_on = COALESCE(new.purchased_on, orders.purchased_on)
+                    purchased_on = COALESCE(new.purchased_on, orders.purchased_on),
+                    due_on = COALESCE(orders.due_on, new.due_on)
                 """,  # imported_at is left alone: it records when the order was first added.
                 (
                     order["order_id"], invoice_id, order["job_name"],
                     order["total_cents"], now, purchased_on,
+                    purchased_on, PAYMENT_TERMS_DAYS,
                 ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
