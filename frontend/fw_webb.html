@@ -28,6 +28,7 @@
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
   thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .date { white-space: nowrap; color: var(--muted); }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .toggle { padding: 2px 8px; font-size: 13px; color: var(--accent); white-space: nowrap; }
   .memo-cell { display: flex; gap: 4px; align-items: center; }
@@ -60,7 +61,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th></tr>
+        <tr><th></th><th>Order ID</th><th>Date added</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -100,6 +101,21 @@ function matches(order, query) {
   const haystack = [order.order_id, order.job_name, order.memo,
     ...order.items.flatMap((i) => [i.product, i.description])].join(" ").toLowerCase();
   return haystack.includes(query);
+}
+
+// The server stores UTC without a zone marker; mark it as UTC so it shows in local time.
+function parseUtc(value) {
+  if (!value) return null;
+  const date = new Date(/[zZ]|[+-]\d\d:\d\d$/.test(value) ? value : value + "Z");
+  return isNaN(date) ? null : date;
+}
+function formatDate(value) {
+  const date = parseUtc(value);
+  return date ? date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+}
+function formatDateTime(value) {
+  const date = parseUtc(value);
+  return date ? date.toLocaleString("en-US") : "";
 }
 
 function itemsTable(order) {
@@ -168,12 +184,13 @@ function render() {
     rows.push(el("tr", {},
       el("td", {}, toggle),
       el("td", { textContent: order.order_id }),
+      el("td", { textContent: formatDate(order.imported_at), title: formatDateTime(order.imported_at), className: "date" }),
       el("td", { textContent: order.job_name }),
       el("td", {}, memoInput(order)),
       el("td", { textContent: order.items.length, className: "num" }),
       el("td", { textContent: money(order.total_cents), className: "num" })));
     if (isOpen) {
-      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 6 }, itemsTable(order))));
+      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 7 }, itemsTable(order))));
     }
   }
   $("rows").replaceChildren(...rows);
