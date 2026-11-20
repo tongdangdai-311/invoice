@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
 import pymysql
@@ -92,6 +93,10 @@ job = ScrapeJob()
 
 class MemoUpdate(BaseModel):
     memo: str
+
+
+class DueDateUpdate(BaseModel):
+    due_on: date | None  # null clears it
 
 
 def _session_token(password: str) -> bytes:
@@ -190,6 +195,13 @@ def suggest_memo(order_id: str) -> dict:
         return {"memo": memo_ai.suggest_memo(order)}
     except memo_ai.MemoUnavailable as error:
         raise HTTPException(503, str(error)) from None
+
+
+@app.patch("/api/orders/{order_id}/due-date")
+def update_due_date(order_id: str, update: DueDateUpdate) -> dict:
+    if not store.set_due_date(order_id, update.due_on):
+        raise HTTPException(404, "Order not found")
+    return {"order_id": order_id, "due_on": update.due_on}
 
 
 @app.patch("/api/orders/{order_id}")

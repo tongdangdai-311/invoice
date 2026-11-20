@@ -34,6 +34,7 @@ SCHEMA = (
         total_cents BIGINT NOT NULL,
         imported_at DATETIME NOT NULL,
         purchased_on DATE NULL,
+        due_on DATE NULL,
         INDEX idx_invoice_id (invoice_id)
     ) CHARACTER SET utf8mb4
     """,
@@ -53,6 +54,9 @@ SCHEMA = (
 )
 
 _schema_ready = False
+
+# Invoices are due this many days after the purchase date.
+PAYMENT_TERMS_DAYS = 60
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -86,10 +90,11 @@ def _cursor():
             if not _schema_ready:
                 for statement in SCHEMA:
                     cursor.execute(statement)
-                # Databases created before purchased_on existed need the column added.
-                cursor.execute("SHOW COLUMNS FROM orders LIKE 'purchased_on'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE orders ADD COLUMN purchased_on DATE NULL")
+                # Databases created before these columns existed need them added.
+                for column in ("purchased_on", "due_on"):
+                    cursor.execute("SHOW COLUMNS FROM orders LIKE %s", (column,))
+                    if not cursor.fetchone():
+                        cursor.execute(f"ALTER TABLE orders ADD COLUMN {column} DATE NULL")
                 _schema_ready = True
             yield cursor
         conn.commit()
@@ -169,24 +174,29 @@ def save_orders(
     orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None
 ) -> None:
     """Insert or refresh orders. A memo the user already wrote is never overwritten,
-    and a known purchase date is kept when a CSV import has none."""
+    and a known purchase date is kept when a CSV import has none. A missing due date
+    is filled in as the purchase date plus PAYMENT_TERMS_DAYS; one already set
+    (including one typed in by hand) is kept."""
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
     with _cursor() as cursor:
         for order in orders:
             cursor.execute(
                 """
                 INSERT INTO orders
-                    (order_id, invoice_id, job_name, memo, total_cents, imported_at, purchased_on)
-                VALUES (%s, %s, %s, '', %s, %s, %s) AS new
+                    (order_id, invoice_id, job_name, memo, total_cents, imported_at,
+                     purchased_on, due_on)
+                VALUES (%s, %s, %s, '', %s, %s, %s, %s + INTERVAL %s DAY) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
                     total_cents = new.total_cents,
-                    purchased_on = COALESCE(new.purchased_on, orders.purchased_on)
+                    purchased_on = COALESCE(new.purchased_on, orders.purchased_on),
+                    due_on = COALESCE(orders.due_on, new.due_on)
                 """,  # imported_at is left alone: it records when the order was first added.
                 (
                     order["order_id"], invoice_id, order["job_name"],
                     order["total_cents"], now, purchased_on,
+                    purchased_on, PAYMENT_TERMS_DAYS,
                 ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
@@ -224,6 +234,12 @@ def get_order(order_id: str) -> dict | None:
             return None
         cursor.execute("SELECT * FROM items WHERE order_id = %s ORDER BY id", (order_id,))
         return {**order, "items": cursor.fetchall()}
+
+
+def set_due_date(order_id: str, due_on: date | None) -> bool:
+    """Typed in by hand for now; imports and scrapes never change it."""
+    with _cursor() as cursor:
+        return cursor.execute("UPDATE orders SET due_on = %s WHERE order_id = %s", (due_on, order_id)) > 0
 
 
 def set_memo(order_id: str, memo: str) -> bool:

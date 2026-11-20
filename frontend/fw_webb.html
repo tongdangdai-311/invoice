@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>F.W. Webb Invoices</title>
 <style>
-  :root { --ink: #1c2024; --muted: #626b75; --line: #dde1e6; --bg: #f5f6f8; --accent: #1f5f8b; --bad: #a32020; --good: #1d6b3a; }
+  :root { --ink: #1c2024; --muted: #626b75; --line: #dde1e6; --bg: #f5f6f8; --accent: #1f5f8b; --bad: #a32020; --good: #1d6b3a; --soon: #b7791f; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
   main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
@@ -34,6 +34,15 @@
   th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
   thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
   .date, .date-col { white-space: nowrap; padding-left: 24px; }
+  /* Due-date status: a colored outline around the whole invoice row, plus a text note. */
+  tr.due-ok { outline: 2px solid var(--good); outline-offset: -2px; }
+  tr.due-soon { outline: 2px solid var(--soon); outline-offset: -2px; }
+  tr.due-overdue { outline: 2px solid var(--bad); outline-offset: -2px; }
+  .due-note { display: block; font-size: 12px; margin-top: 2px; white-space: nowrap; }
+  .due-note.due-ok { color: var(--good); }
+  .due-note.due-soon { color: var(--soon); }
+  .due-note.due-overdue { color: var(--bad); font-weight: 600; }
+  .due { font: inherit; font-size: 14px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 4px; color: var(--ink); }
   .date { color: var(--muted); }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .toggle { padding: 2px 8px; font-size: 13px; color: var(--accent); white-space: nowrap; }
@@ -67,7 +76,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th><th class="date-col">Date purchased</th></tr>
+        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th><th class="date-col">Date purchased</th><th>Due date</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
@@ -153,6 +162,48 @@ function itemsTable(order) {
   return el("table", { className: "items" }, el("thead", {}, head), el("tbody", {}, ...body));
 }
 
+// Green: more than 10 days left. Yellow: 10 days or fewer (including today). Red: overdue.
+function dueStatus(order) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(order.due_on || "");
+  if (!match) return null;
+  const due = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const days = Math.round((due - today) / 86400000);
+  if (days < 0) return { cls: "due-overdue", text: `${-days} day${days === -1 ? "" : "s"} overdue` };
+  if (days === 0) return { cls: "due-soon", text: "Due today" };
+  const text = `Due in ${days} day${days === 1 ? "" : "s"}`;
+  return { cls: days > 10 ? "due-ok" : "due-soon", text };
+}
+
+function dueDateCell(order) {
+  const status = dueStatus(order);
+  const cell = el("td", {}, dueDateInput(order));
+  if (status) cell.append(el("span", { className: `due-note ${status.cls}`, textContent: status.text }));
+  return cell;
+}
+
+function dueDateInput(order) {
+  const input = el("input", { type: "date", className: "due", value: order.due_on || "" });
+  input.setAttribute("aria-label", `Due date for order ${order.order_id}`);
+  input.addEventListener("change", async () => {
+    try {
+      await api(`/api/orders/${encodeURIComponent(order.order_id)}/due-date`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ due_on: input.value || null }),
+      });
+      order.due_on = input.value || null;
+      render();  // Refresh the row's color and note.
+      showMessage("");
+    } catch (error) {
+      input.value = order.due_on || "";
+      showMessage(`Due date not saved for order ${order.order_id}: ${error.message}`);
+    }
+  });
+  return input;
+}
+
 function memoInput(order) {
   const input = el("input", { className: "memo", value: order.memo, placeholder: "Add a memo" });
   input.setAttribute("aria-label", `Memo for order ${order.order_id}`);
@@ -203,7 +254,7 @@ function render() {
       isOpen ? open.delete(order.order_id) : open.add(order.order_id);
       render();
     });
-    rows.push(el("tr", {},
+    rows.push(el("tr", { className: dueStatus(order)?.cls || "" },
       el("td", {}, toggle),
       el("td", { textContent: order.order_id }),
       el("td", { textContent: order.job_name }),
@@ -216,9 +267,10 @@ function render() {
           ? `Order date from F.W. Webb. Added here ${formatDateTime(order.imported_at)}`
           : `Purchase date unknown (imported from a CSV). Added here ${formatDateTime(order.imported_at)}`,
         className: "date",
-      })));
+      }),
+      dueDateCell(order)));
     if (isOpen) {
-      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 7 }, itemsTable(order))));
+      rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 8 }, itemsTable(order))));
     }
   }
   $("rows").replaceChildren(...rows);
