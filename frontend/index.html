@@ -13,11 +13,10 @@
   .lead { color: var(--muted); margin: 0 0 32px; }
   .card { display: block; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 22px 24px; color: inherit; text-decoration: none; }
   .card:hover { border-color: var(--accent); }
-  .card:focus-visible, .portal:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .card h2 { font-size: 19px; margin: 0 0 4px; }
   .card p { margin: 0 0 14px; color: var(--muted); }
   .open { color: var(--accent); font-weight: 600; }
-  .portal { display: inline-block; margin-top: 14px; color: var(--accent); }
   .signout { margin-top: 28px; padding: 0; border: 0; background: none; font: inherit; color: var(--muted); text-decoration: underline; cursor: pointer; }
 </style>
 </head>
@@ -30,7 +29,6 @@
     <p>Download invoices from the portal and review orders, items, jobs and memos.</p>
     <span class="open">Open invoices &rarr;</span>
   </a>
-  <a class="portal" href="https://www.fwwebb.com/wobf/payyourbill" target="_blank" rel="noopener">Go to the F.W. Webb website</a>
   <form method="post" action="/logout"><button class="signout" type="submit">Sign out</button></form>
 </main>
 </body>

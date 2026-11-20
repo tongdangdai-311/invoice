@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
 from app import memo_ai, store
+from app.scraper import SIGN_IN_NEEDED, SIGNED_IN
 
 ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
@@ -30,6 +31,9 @@ class ScrapeJob:
         self.running = False
         self.exit_code: int | None = None
         self.log: list[str] = []
+        self.needs_sign_in = False  # The scraper is waiting for you to sign in to F.W. Webb.
+        self.process: subprocess.Popen | None = None
+        self.cancelled = False
 
     def start(self) -> bool:
         with self.lock:
@@ -38,13 +42,15 @@ class ScrapeJob:
             self.running = True
             self.exit_code = None
             self.log = []
+            self.needs_sign_in = False
+            self.cancelled = False
         threading.Thread(target=self._run, daemon=True).start()
         return True
 
     def _run(self) -> None:
         code = 1
         try:
-            process = subprocess.Popen(
+            process = self.process = subprocess.Popen(
                 [sys.executable, "-u", "-m", "app.scraper"],
                 cwd=ROOT,
                 env={**os.environ, "PYTHONIOENCODING": "utf-8"},
@@ -55,7 +61,12 @@ class ScrapeJob:
                 errors="replace",
             )
             for line in process.stdout:
-                self.log.append(line.rstrip())
+                line = line.rstrip()
+                self.log.append(line)
+                if line == SIGN_IN_NEEDED:
+                    self.needs_sign_in = True
+                elif line == SIGNED_IN:
+                    self.needs_sign_in = False
             code = process.wait()
         except OSError as error:
             self.log.append(f"Could not start the scraper: {error}")
@@ -63,6 +74,17 @@ class ScrapeJob:
             with self.lock:
                 self.exit_code = code
                 self.running = False
+                self.needs_sign_in = False
+                self.process = None
+
+    def cancel(self) -> bool:
+        with self.lock:
+            if not self.running or self.process is None:
+                return False
+            self.cancelled = True
+            self.log.append("Scrape cancelled.")
+            self.process.terminate()
+            return True
 
 
 job = ScrapeJob()
@@ -203,6 +225,19 @@ def start_scrape() -> dict:
     return {"running": True}
 
 
+@app.post("/api/scrape/cancel")
+def cancel_scrape() -> dict:
+    if not job.cancel():
+        raise HTTPException(409, "No scrape is running")
+    return {"cancelled": True}
+
+
 @app.get("/api/scrape")
 def scrape_status() -> dict:
-    return {"running": job.running, "exit_code": job.exit_code, "log": list(job.log)}
+    return {
+        "running": job.running,
+        "exit_code": job.exit_code,
+        "needs_sign_in": job.needs_sign_in,
+        "cancelled": job.cancelled,
+        "log": list(job.log),
+    }

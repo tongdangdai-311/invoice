@@ -23,12 +23,18 @@
   #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
   #message { color: var(--bad); margin: 0 0 12px; }
   #message.ok { color: var(--good); }
+  dialog { max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 22px; color: var(--ink); }
+  dialog::backdrop { background: rgb(0 0 0 / .35); }
+  dialog h2 { font-size: 18px; margin: 0 0 8px; }
+  dialog p { margin: 0 0 18px; color: var(--muted); }
+  .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; }
   #message:empty { display: none; }
   .table-wrap { background: #fff; border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
   th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
   thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
-  .date { white-space: nowrap; color: var(--muted); }
+  .date, .date-col { white-space: nowrap; padding-left: 24px; }
+  .date { color: var(--muted); }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .toggle { padding: 2px 8px; font-size: 13px; color: var(--accent); white-space: nowrap; }
   .memo-cell { display: flex; gap: 4px; align-items: center; }
@@ -61,13 +67,22 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th></th><th>Order ID</th><th>Date added</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th></tr>
+        <tr><th></th><th>Order ID</th><th>Job name</th><th>Memo</th><th class="num">Items</th><th class="num">Total price</th><th class="date-col">Date purchased</th></tr>
       </thead>
       <tbody id="rows"></tbody>
     </table>
     <div id="empty" class="empty" hidden></div>
   </div>
 </main>
+
+<dialog id="signin-dialog" aria-labelledby="signin-title">
+  <h2 id="signin-title">Sign in to F.W. Webb?</h2>
+  <p>You're not signed in to F.W. Webb yet. A sign-in window has opened on this computer. Sign in there and the scrape will continue by itself.</p>
+  <div class="dialog-actions">
+    <button id="signin-cancel" type="button">Cancel scraping</button>
+    <button id="signin-ok" type="button" class="primary">Sign in</button>
+  </div>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -112,6 +127,13 @@ function parseUtc(value) {
 function formatDate(value) {
   const date = parseUtc(value);
   return date ? date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+}
+// Purchase dates are calendar days (no time), so read them as local dates, not UTC.
+function formatDay(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value || "");
+  if (!match) return "";
+  const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
 function formatDateTime(value) {
   const date = parseUtc(value);
@@ -184,11 +206,17 @@ function render() {
     rows.push(el("tr", {},
       el("td", {}, toggle),
       el("td", { textContent: order.order_id }),
-      el("td", { textContent: formatDate(order.imported_at), title: formatDateTime(order.imported_at), className: "date" }),
       el("td", { textContent: order.job_name }),
       el("td", {}, memoInput(order)),
       el("td", { textContent: order.items.length, className: "num" }),
-      el("td", { textContent: money(order.total_cents), className: "num" })));
+      el("td", { textContent: money(order.total_cents), className: "num" }),
+      el("td", {
+        textContent: order.purchased_on ? formatDay(order.purchased_on) : "—",
+        title: order.purchased_on
+          ? `Order date from F.W. Webb. Added here ${formatDateTime(order.imported_at)}`
+          : `Purchase date unknown (imported from a CSV). Added here ${formatDateTime(order.imported_at)}`,
+        className: "date",
+      })));
     if (isOpen) {
       rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: 7 }, itemsTable(order))));
     }
@@ -216,18 +244,43 @@ function showLog(status) {
   $("log").scrollTop = $("log").scrollHeight;
 }
 
+let signInPrompted = false;  // Ask once per scrape, not on every poll.
+
+function updateSignInPrompt(status) {
+  const dialog = $("signin-dialog");
+  if (status.running && status.needs_sign_in && !signInPrompted) {
+    signInPrompted = true;
+    dialog.showModal();
+  } else if (!status.needs_sign_in && dialog.open) {
+    dialog.close();  // Signed in (or the scrape ended), so the question no longer applies.
+  }
+  if (!status.running) signInPrompted = false;
+}
+
 async function pollScrape() {
   const status = await api("/api/scrape");
   showLog(status);
+  updateSignInPrompt(status);
   $("scrape").disabled = status.running;
   $("scrape").textContent = status.running ? "Scraping..." : "Scrape invoices";
   if (status.running) {
     setTimeout(() => pollScrape().catch((e) => showMessage(e.message)), 1500);
     return;
   }
-  if (status.exit_code) showMessage("The scrape did not finish cleanly. See the log above.");
+  if (status.cancelled) showMessage("Scrape cancelled.");
+  else if (status.exit_code) showMessage("The scrape did not finish cleanly. See the log above.");
   load();
 }
+
+$("signin-ok").addEventListener("click", () => $("signin-dialog").close());
+$("signin-cancel").addEventListener("click", async () => {
+  $("signin-dialog").close();
+  try {
+    await api("/api/scrape/cancel", { method: "POST" });
+  } catch (error) {
+    showMessage(`Could not cancel: ${error.message}`);
+  }
+});
 
 $("scrape").addEventListener("click", async () => {
   showMessage("");
