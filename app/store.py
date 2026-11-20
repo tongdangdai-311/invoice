@@ -34,6 +34,7 @@ SCHEMA = (
         total_cents BIGINT NOT NULL,
         imported_at DATETIME NOT NULL,
         purchased_on DATE NULL,
+        due_on DATE NULL,
         INDEX idx_invoice_id (invoice_id)
     ) CHARACTER SET utf8mb4
     """,
@@ -86,10 +87,11 @@ def _cursor():
             if not _schema_ready:
                 for statement in SCHEMA:
                     cursor.execute(statement)
-                # Databases created before purchased_on existed need the column added.
-                cursor.execute("SHOW COLUMNS FROM orders LIKE 'purchased_on'")
-                if not cursor.fetchone():
-                    cursor.execute("ALTER TABLE orders ADD COLUMN purchased_on DATE NULL")
+                # Databases created before these columns existed need them added.
+                for column in ("purchased_on", "due_on"):
+                    cursor.execute("SHOW COLUMNS FROM orders LIKE %s", (column,))
+                    if not cursor.fetchone():
+                        cursor.execute(f"ALTER TABLE orders ADD COLUMN {column} DATE NULL")
                 _schema_ready = True
             yield cursor
         conn.commit()
@@ -224,6 +226,12 @@ def get_order(order_id: str) -> dict | None:
             return None
         cursor.execute("SELECT * FROM items WHERE order_id = %s ORDER BY id", (order_id,))
         return {**order, "items": cursor.fetchall()}
+
+
+def set_due_date(order_id: str, due_on: date | None) -> bool:
+    """Typed in by hand for now; imports and scrapes never change it."""
+    with _cursor() as cursor:
+        return cursor.execute("UPDATE orders SET due_on = %s WHERE order_id = %s", (due_on, order_id)) > 0
 
 
 def set_memo(order_id: str, memo: str) -> bool:
