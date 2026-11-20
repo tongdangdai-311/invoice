@@ -4,7 +4,7 @@ import io
 import os
 import re
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -33,6 +33,7 @@ SCHEMA = (
         memo        TEXT NOT NULL,
         total_cents BIGINT NOT NULL,
         imported_at DATETIME NOT NULL,
+        purchased_on DATE NULL,
         INDEX idx_invoice_id (invoice_id)
     ) CHARACTER SET utf8mb4
     """,
@@ -85,6 +86,10 @@ def _cursor():
             if not _schema_ready:
                 for statement in SCHEMA:
                     cursor.execute(statement)
+                # Databases created before purchased_on existed need the column added.
+                cursor.execute("SHOW COLUMNS FROM orders LIKE 'purchased_on'")
+                if not cursor.fetchone():
+                    cursor.execute("ALTER TABLE orders ADD COLUMN purchased_on DATE NULL")
                 _schema_ready = True
             yield cursor
         conn.commit()
@@ -160,21 +165,29 @@ def parse_csv(raw: bytes) -> list[dict]:
     return list(orders.values())
 
 
-def save_orders(orders: list[dict], invoice_id: str | None = None) -> None:
-    """Insert or refresh orders. A memo the user already wrote is never overwritten."""
+def save_orders(
+    orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None
+) -> None:
+    """Insert or refresh orders. A memo the user already wrote is never overwritten,
+    and a known purchase date is kept when a CSV import has none."""
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
     with _cursor() as cursor:
         for order in orders:
             cursor.execute(
                 """
-                INSERT INTO orders (order_id, invoice_id, job_name, memo, total_cents, imported_at)
-                VALUES (%s, %s, %s, '', %s, %s) AS new
+                INSERT INTO orders
+                    (order_id, invoice_id, job_name, memo, total_cents, imported_at, purchased_on)
+                VALUES (%s, %s, %s, '', %s, %s, %s) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
-                    total_cents = new.total_cents
+                    total_cents = new.total_cents,
+                    purchased_on = COALESCE(new.purchased_on, orders.purchased_on)
                 """,  # imported_at is left alone: it records when the order was first added.
-                (order["order_id"], invoice_id, order["job_name"], order["total_cents"], now),
+                (
+                    order["order_id"], invoice_id, order["job_name"],
+                    order["total_cents"], now, purchased_on,
+                ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
             cursor.executemany(

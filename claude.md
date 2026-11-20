@@ -7,11 +7,8 @@ When we click into that, it would have a spreadsheet of csv, like the sample in 
 The Link to log-in page is in ./docs/url.txt
 
 # MAIN function of the app.
-
-
-
-
-
+Report: the same format at /docs/sample/Invoices.xlsx file
+Tailor: make it simple annd easy to use in app: Report_page feature, with live pie chart.
 
 
 # Description of the csv file.
@@ -19,11 +16,10 @@ From the sample csv file, what we actually need from that is the the order_id, t
 
 
 # ADR:
-
-Hosting: Azure statis web service
+Hosting: Vercel
 Databasee: MySQL
 
-language: Python, fatsAPi, playwright and numpy for data processing.
+language: Python, fatsAPi, playwright and Numpy for data processing.
 UI: simple html file.
 
 

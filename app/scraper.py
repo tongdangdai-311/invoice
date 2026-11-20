@@ -9,6 +9,7 @@ never clicks a payment control.
 import os
 import re
 import sys
+from datetime import date
 from urllib.parse import urlparse
 
 from pymysql import MySQLError
@@ -34,6 +35,14 @@ PAGE_TIMEOUT_MS = 30 * 1000
 INVOICE_ID_RE = re.compile(r"Invoice ID:\s*(\d+)")
 EXPORT_LABEL_RE = re.compile(r"^\s*(export|download)\s*$", re.I)
 
+# The invoice page shows "Order Date: 07/21/2026" (when it was bought) and "Invoice Date: ...".
+ORDER_DATE_RE = re.compile(r"Order Date:?\s*(\d{1,2})/(\d{1,2})/(\d{4})", re.I)
+INVOICE_DATE_RE = re.compile(r"Invoice Date:?\s*(\d{1,2})/(\d{1,2})/(\d{4})", re.I)
+
+# The web app watches for these exact lines to know when to ask you to sign in.
+SIGN_IN_NEEDED = "Please sign in using the browser window (waiting up to 5 minutes)..."
+SIGNED_IN = "Signed in."
+
 
 def log(message: str) -> None:
     print(message, flush=True)
@@ -44,9 +53,9 @@ def wait_for_sign_in(page) -> None:
     site_host = urlparse(BILL_URL).hostname
     page.goto(LOGIN_URL)
     if urlparse(page.url).hostname != site_host:
-        log("Please sign in using the browser window (waiting up to 5 minutes)...")
+        log(SIGN_IN_NEEDED)
     page.wait_for_url(lambda url: urlparse(url).hostname == site_host, timeout=SIGN_IN_TIMEOUT_MS)
-    log("Signed in.")
+    log(SIGNED_IN)
 
 
 def find_invoice_ids(page) -> list[str]:
@@ -68,8 +77,22 @@ def find_invoice_ids(page) -> list[str]:
     return ids
 
 
+def find_purchase_date(text: str) -> date | None:
+    """Order Date if shown, otherwise Invoice Date."""
+    for pattern in (ORDER_DATE_RE, INVOICE_DATE_RE):
+        match = pattern.search(text)
+        if match:
+            month, day, year = (int(part) for part in match.groups())
+            try:
+                return date(year, month, day)
+            except ValueError:
+                continue
+    return None
+
+
 def download_invoice(page, invoice_id: str) -> None:
     page.goto(INVOICE_URL.format(id=invoice_id))
+    purchased_on = find_purchase_date(page.evaluate("document.body.textContent"))
     controls = page.locator("a, button, [role=button]")
     export = controls.filter(has_text=EXPORT_LABEL_RE).or_(
         page.locator('[title="Export" i], [title="Download" i]')
@@ -80,10 +103,11 @@ def download_invoice(page, invoice_id: str) -> None:
     target = DATA_DIR / "downloads" / f"{invoice_id}.csv"
     download_info.value.save_as(target)
     orders = parse_csv(target.read_bytes())
-    save_orders(orders, invoice_id=invoice_id)
+    save_orders(orders, invoice_id=invoice_id, purchased_on=purchased_on)
     for order in orders:
         log(f"  {invoice_id}: order {order['order_id']}, {len(order['items'])} items, "
-            f"${order['total_cents'] / 100:,.2f}, job: {order['job_name'] or '(none)'}")
+            f"${order['total_cents'] / 100:,.2f}, job: {order['job_name'] or '(none)'}, "
+            f"purchased: {purchased_on or 'date not found'}")
 
 
 def scrape() -> int:
