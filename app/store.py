@@ -172,9 +172,8 @@ def save_orders(orders: list[dict], invoice_id: str | None = None) -> None:
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
-                    total_cents = new.total_cents,
-                    imported_at = new.imported_at
-                """,
+                    total_cents = new.total_cents
+                """,  # imported_at is left alone: it records when the order was first added.
                 (order["order_id"], invoice_id, order["job_name"], order["total_cents"], now),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))

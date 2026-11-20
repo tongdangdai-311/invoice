@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from app import memo_ai, store
 
 ROOT = Path(__file__).resolve().parent.parent
+FRONTEND = ROOT / "frontend"
 SESSION_COOKIE = "invoice_session"
 
 app = FastAPI(title="Invoice Management")
@@ -111,7 +112,7 @@ async def require_login(request: Request, call_next):
 
 @app.get("/login", include_in_schema=False)
 def login_page() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "login.html")
+    return FileResponse(FRONTEND / "login.html")
 
 
 @app.post("/login", include_in_schema=False)
@@ -143,12 +144,12 @@ def logout() -> RedirectResponse:
 
 @app.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "index.html")
+    return FileResponse(FRONTEND / "index.html")
 
 
 @app.get("/fw-webb", include_in_schema=False)
 def fw_webb() -> FileResponse:
-    return FileResponse(Path(__file__).parent / "static" / "fw_webb.html")
+    return FileResponse(FRONTEND / "fw_webb.html")
 
 
 @app.get("/api/orders")
