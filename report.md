@@ -1,0 +1,1 @@
+CHoose kafka for reporting? or just python library, like seaborn, matplotlib for chart report.

@@ -6,6 +6,11 @@ When we click into that, it would have a spreadsheet of csv, like the sample in 
 
 The Link to log-in page is in ./docs/url.txt
 
+# Manually uploading:
+Upload CSV file, then we have to fill in purchased, due day.
+
+
+
 # MAIN function of the app.
 Report: the same format at /docs/sample/Invoices.xlsx file
 Tailor: make it simple annd easy to use in app: Report_page feature, with live pie chart.
