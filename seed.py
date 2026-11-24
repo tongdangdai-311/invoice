@@ -19,7 +19,7 @@ from pathlib import Path
 
 from faker import Faker
 
-from app.store import PAYMENT_TERMS_DAYS, _cursor, parse_csv
+from app.store import _cursor, due_date_for, parse_csv
 
 SAMPLE = Path(__file__).parent / "docs" / "sample" / "csv_sample.csv"
 PREFIX = "SEED-"
@@ -37,14 +37,15 @@ JOBS = [
     "QUINCY SCHOOL HVAC",
     "SHOP STOCK",
 ]
+# Memos end with ": <job type>", the way Claude's suggestions do.
 MEMOS = [
-    "Underground plumbing rough-in",
-    "Copper supply lines and fittings",
-    "Hangers and riser clamps",
-    "PVC drain, waste and vent",
-    "Insulation for hot water lines",
-    "Saw blades and shop consumables",
-    "Fasteners and threaded rod",
+    "Underground plumbing rough-in: Plumbing",
+    "Copper supply lines and fittings: Plumbing",
+    "Hangers and riser clamps: HVAC",
+    "PVC drain, waste and vent: Plumbing",
+    "Insulation for hot water lines: Plumbing",
+    "Boiler room copper piping: HVAC",
+    "Fasteners and threaded rod: HVAC",
     "",  # Some orders have no memo yet, like freshly scraped ones.
 ]
 
@@ -66,15 +67,30 @@ def ext_cents(qty: int, unit_price: str, uom: str) -> int:
     return int((amount * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
 
 
+def purchase_date(fake: Faker, due: str | None) -> date:
+    """A past purchase date; with `due`, one whose due date lands in that range.
+    Due dates are always month-ends, so some ranges are empty on some days
+    (e.g. "soon" early in a month), which is reported instead of looping forever."""
+    if not due:
+        return fake.date_between(start_date="-365d", end_date="today")
+    low, high = DUE_RANGES[due]
+    today = date.today()
+    candidates = [
+        today - timedelta(days=back)
+        for back in range(0, 365)
+        if low <= (due_date_for(today - timedelta(days=back)) - today).days <= high
+    ]
+    if not candidates:
+        raise SystemExit(f'No purchase date gives a due date that is "{due}" today '
+                         "(due dates are month-ends). Try another --due.")
+    return random.choice(candidates)
+
+
 def make_orders(count: int, fake: Faker, catalog: list[dict], due: str | None = None) -> list[dict]:
     orders = []
     for n in range(count):
-        if due:
-            due_on = date.today() + timedelta(days=random.randint(*DUE_RANGES[due]))
-            purchased_on = due_on - timedelta(days=PAYMENT_TERMS_DAYS)
-        else:
-            purchased_on = fake.date_between(start_date="-365d", end_date="today")
-            due_on = purchased_on + timedelta(days=PAYMENT_TERMS_DAYS)
+        purchased_on = purchase_date(fake, due)
+        due_on = due_date_for(purchased_on)
         items = []
         for product in random.sample(catalog, k=random.randint(1, min(12, len(catalog)))):
             qty = random.choice([1, 2, 3, 5, 6, 10, 15, 25, 40, 48, 100])

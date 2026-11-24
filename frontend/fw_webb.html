@@ -8,7 +8,7 @@
   :root { --ink: #1c2024; --muted: #626b75; --line: #dde1e6; --bg: #f5f6f8; --accent: #1f5f8b; --bad: #a32020; --good: #1d6b3a; --soon: #b7791f; }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
-  main { max-width: 1120px; margin: 0 auto; padding: 28px 20px 60px; }
+  main { max-width: 1440px; margin: 0 auto; padding: 28px 20px 60px; }
   .back { display: inline-block; margin-bottom: 12px; color: var(--accent); }
   header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 18px; }
   .title { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-right: auto; }
@@ -20,7 +20,12 @@
   .mark-paid:hover, button.paid-confirm { background: var(--good); border-color: var(--good); color: #fff; }
   .card { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .order-id { white-space: nowrap; }
-  body.paid main { max-width: 1440px; }  /* Room for the card, payer and date columns. */
+  .sort-btn { margin-left: 6px; padding: 0 5px; font-size: 10px; line-height: 18px; color: var(--muted); border-color: transparent; background: none; vertical-align: 1px; }
+  .sort-btn:hover { border-color: var(--line); color: var(--ink); }
+  .sort-btn.active { color: var(--accent); border-color: var(--accent); background: #fff; }
+  .job-type { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; background: #eceef1; color: var(--ink); }
+  .job-type-plumbing { background: #e3eef8; color: #1f5f8b; }
+  .job-type-hvac { background: #fbebd9; color: #9a4a12; }
   .field { display: block; margin: 0 0 14px; }
   .field span { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
   .field input { width: 100%; font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
@@ -35,6 +40,33 @@
   .toolbar { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
   #search { width: min(340px, 100%); font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
   #summary { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #summary strong { color: var(--ink); font-size: 17px; }
+
+  /* Slicers: one horizontal row of chips per field, under the search bar. */
+  .slicers { display: grid; gap: 8px; margin: 0 0 14px; }
+  .slicer { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .slicer-label { flex: none; width: 74px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+  .chips { display: flex; gap: 6px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
+  .chip { flex: none; padding: 4px 12px; font-size: 13px; border-radius: 999px; border: 1px solid var(--line); background: #fff; color: var(--ink); white-space: nowrap; }
+  .chip:hover { border-color: var(--accent); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  /* Monthly spend chart. */
+  .chart-card { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px 6px; margin-bottom: 14px; }
+  .chart-head { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; justify-content: space-between; margin-bottom: 4px; }
+  .chart-title { font-size: 14px; font-weight: 600; margin: 0; }
+  .chart-note { font-size: 12px; color: var(--muted); }
+  #chart svg { display: block; width: 100%; height: 190px; overflow: visible; }
+  #chart .grid { stroke: #e9ecef; stroke-width: 1; }
+  #chart .axis-text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  #chart .bar { fill: var(--accent); }
+  #chart .bar.dim { fill: #c4d6e5; }
+  #chart .hit { fill: transparent; cursor: pointer; outline: none; }
+  #chart .hit:hover + .bar, #chart .hit:focus-visible + .bar { filter: brightness(0.82); }
+  #chart .hit:focus-visible { stroke: var(--accent); stroke-width: 1.5; }
+  .tip { position: absolute; pointer-events: none; background: var(--ink); color: #fff; border-radius: 6px; padding: 6px 9px; font-size: 12px; line-height: 1.35; white-space: nowrap; transform: translate(-50%, calc(-100% - 8px)); }
+  .tip strong { display: block; font-size: 14px; }
+  .tip[hidden] { display: none; }
   #message { color: var(--bad); margin: 0 0 12px; }
   #message.ok { color: var(--good); }
   dialog { width: min(420px, calc(100% - 32px)); max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 22px; color: var(--ink); }
@@ -49,9 +81,14 @@
   thead th { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
   .date, .date-col { white-space: nowrap; padding-left: 24px; }
   /* Due-date status: a colored outline around the whole invoice row, plus a text note. */
-  tr.due-ok { outline: 2px solid var(--good); outline-offset: -2px; }
-  tr.due-soon { outline: 2px solid var(--soon); outline-offset: -2px; }
-  tr.due-overdue { outline: 2px solid var(--bad); outline-offset: -2px; }
+  /* Invoice rows are separate boxes with a 6px gap, so neighbouring outlines never touch. */
+  .table-wrap > table { border-collapse: separate; border-spacing: 0 6px; padding: 0 8px 2px; }
+  .table-wrap > table > tbody > tr > td { border-bottom: none; }
+  .table-wrap > table > tbody > tr:not(.items-row) { outline: 1px solid var(--line); outline-offset: -1px; border-radius: 6px; }
+  .table-wrap > table > tbody > tr.items-row > td { border-radius: 0 0 6px 6px; }
+  #rows > tr.due-ok { outline: 2px solid var(--good); outline-offset: -2px; }
+  #rows > tr.due-soon { outline: 2px solid var(--soon); outline-offset: -2px; }
+  #rows > tr.due-overdue { outline: 2px solid var(--bad); outline-offset: -2px; }
   .due-note { display: block; font-size: 12px; margin-top: 2px; white-space: nowrap; }
   .due-note.due-ok { color: var(--good); }
   .due-note.due-soon { color: var(--soon); }
@@ -87,7 +124,21 @@
 
   <div class="toolbar">
     <input id="search" type="search" placeholder="Search order, job, memo or item" aria-label="Search invoices">
-    <div id="summary"></div>
+    <div id="summary" aria-live="polite"></div>
+  </div>
+
+  <div class="slicers">
+    <div class="slicer"><span class="slicer-label" id="month-label">Month</span><div id="month-chips" class="chips" role="group" aria-labelledby="month-label"></div></div>
+    <div class="slicer"><span class="slicer-label" id="type-label">Job type</span><div id="type-chips" class="chips" role="group" aria-labelledby="type-label"></div></div>
+  </div>
+
+  <div class="chart-card">
+    <div class="chart-head">
+      <h2 class="chart-title">Spend by purchase month</h2>
+      <span id="chart-note" class="chart-note"></span>
+    </div>
+    <div id="chart"></div>
+    <div id="chart-tip" class="tip" hidden></div>
   </div>
 
   <div class="table-wrap">
@@ -136,7 +187,7 @@ let orders = [];
 const open = new Set();
 // The same page shows unpaid invoices at /fw-webb and paid ones at /fw-webb/paid.
 const PAID = location.pathname.replace(/\/$/, "").endsWith("/paid");
-const COLUMNS = ["", "Order ID", "Job name", "Memo", "Items", "Total price", "Date purchased", "Due date",
+const COLUMNS = ["", "Order ID", "Job name", "Memo", "Job type", "Items", "Total price", "Date purchased", "Due date",
   ...(PAID ? ["Card", "Paid by", "Date paid", ""] : [""])];
 
 function el(tag, props = {}, ...children) {
@@ -162,7 +213,7 @@ async function api(path, options) {
 }
 
 function matches(order, query) {
-  const haystack = [order.order_id, order.job_name, order.memo, order.paid_by || "",
+  const haystack = [order.order_id, order.job_name, order.memo, order.job_type || "", order.paid_by || "",
     ...order.items.flatMap((i) => [i.product, i.description])].join(" ").toLowerCase();
   return haystack.includes(query);
 }
@@ -245,17 +296,37 @@ function dueDateInput(order) {
   return input;
 }
 
+// One cell per order, updated in place when its memo is saved (re-rendering would steal focus).
+const jobTypeCells = new Map();
+const KNOWN_JOB_TYPES = new Set(["Plumbing", "HVAC"]);  // Colored tags; anything else is grey.
+function jobTypeCell(order) {
+  const cell = el("td");
+  jobTypeCells.set(order.order_id, cell);
+  showJobType(order);
+  return cell;
+}
+function showJobType(order) {
+  const cell = jobTypeCells.get(order.order_id);
+  if (!cell) return;
+  const type = order.job_type || "";
+  cell.replaceChildren(type
+    ? el("span", { className: `job-type ${KNOWN_JOB_TYPES.has(type) ? `job-type-${type.toLowerCase()}` : ""}`, textContent: type })
+    : el("span", { className: "date", textContent: "—", title: 'End the memo with ": Plumbing" or ": HVAC"' }));
+}
+
 function memoInput(order) {
   const input = el("input", { className: "memo", value: order.memo, placeholder: "Add a memo" });
   input.setAttribute("aria-label", `Memo for order ${order.order_id}`);
   input.addEventListener("change", async () => {
     try {
-      await api(`/api/orders/${encodeURIComponent(order.order_id)}`, {
+      const saved = await api(`/api/orders/${encodeURIComponent(order.order_id)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ memo: input.value }),
       });
-      order.memo = input.value.trim();
+      order.memo = saved.memo;
+      order.job_type = saved.job_type;  // The memo's text after its last ":", e.g. "Plumbing".
+      showJobType(order);
       showMessage("");
     } catch (error) {
       showMessage(`Memo not saved for order ${order.order_id}: ${error.message}`);
@@ -369,11 +440,47 @@ function showPayers() {
   if (!$("pay-by").value && payers()[0]) $("pay-by").value = payers()[0];
 }
 
+// Due date sort: null = newest added first (the server's order), "asc" = soonest due first, "desc" = latest first.
+let dueSort = null;
+const DUE_SORT_NEXT = { null: "asc", asc: "desc", desc: null };
+
+function dueSortButton() {
+  const button = el("button", { className: "sort-btn" });
+  const update = () => {
+    button.textContent = dueSort === "desc" ? "▼" : "▲";
+    button.classList.toggle("active", dueSort !== null);
+    const label = dueSort === "asc" ? "Sorted soonest due first. Click for latest first."
+      : dueSort === "desc" ? "Sorted latest due first. Click to stop sorting."
+      : "Sort by due date, soonest first";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  };
+  button.addEventListener("click", () => {
+    dueSort = DUE_SORT_NEXT[dueSort];
+    update();
+    render();
+  });
+  update();
+  return button;
+}
+
+function sortByDue(list) {
+  if (!dueSort) return list;
+  const sign = dueSort === "asc" ? 1 : -1;
+  // Orders with no due date always go last; ISO dates sort correctly as text.
+  return [...list].sort((a, b) =>
+    !a.due_on - !b.due_on || (a.due_on && b.due_on ? sign * a.due_on.localeCompare(b.due_on) : 0));
+}
+
 function setUpMode() {
-  $("head").replaceChildren(...COLUMNS.map((name) => el("th", {
-    textContent: name,
-    className: name === "Items" || name === "Total price" ? "num" : name === "Date purchased" ? "date-col" : "",
-  })));
+  $("head").replaceChildren(...COLUMNS.map((name) => {
+    const th = el("th", {
+      textContent: name,
+      className: name === "Items" || name === "Total price" ? "num" : name === "Date purchased" ? "date-col" : "",
+    });
+    if (name === "Due date") th.append(dueSortButton());
+    return th;
+  }));
   if (!PAID) return;
   document.body.classList.add("paid");
   document.title = "F.W. Webb Paid Invoices";
@@ -386,9 +493,159 @@ function setUpMode() {
   $("search").placeholder = "Search order, job, memo, item or who paid";
 }
 
+// ---- Slicers: purchase month and job type. Empty set = no filter ("All"). ----
+const pickedMonths = new Set();
+const pickedTypes = new Set();
+const NO_DATE = "none", NO_TYPE = "none";
+const monthOf = (order) => order.purchased_on ? order.purchased_on.slice(0, 7) : NO_DATE;  // "2026-11"
+const typeOf = (order) => order.job_type || NO_TYPE;
+
+function monthName(key, withYear = true) {
+  if (key === NO_DATE) return "No date";
+  const [y, m] = key.split("-").map(Number);
+  return new Date(y, m - 1, 1).toLocaleDateString("en-US", withYear ? { month: "short", year: "numeric" } : { month: "short" });
+}
+
+function chip(label, pressed, onClick) {
+  const button = el("button", { className: "chip", textContent: label, type: "button" });
+  button.setAttribute("aria-pressed", pressed);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
+// Chips come from all loaded orders, so they don't jump around while you pick.
+function renderSlicer(boxId, picked, keys, labelOf) {
+  const toggle = (key) => () => { picked.has(key) ? picked.delete(key) : picked.add(key); render(); };
+  $(boxId).replaceChildren(
+    chip("All", picked.size === 0, () => { picked.clear(); render(); }),
+    ...keys.map((key) => chip(labelOf(key), picked.has(key), toggle(key))));
+}
+
+function renderSlicers() {
+  for (const key of pickedMonths) if (!orders.some((o) => monthOf(o) === key)) pickedMonths.delete(key);
+  for (const key of pickedTypes) if (!orders.some((o) => typeOf(o) === key)) pickedTypes.delete(key);
+  const months = [...new Set(orders.map(monthOf))].sort((a, b) =>
+    (a === NO_DATE) - (b === NO_DATE) || b.localeCompare(a));  // Newest month first, "No date" last.
+  const known = ["Plumbing", "HVAC"];
+  const types = [...new Set(orders.map(typeOf))].sort((a, b) =>
+    (a === NO_TYPE) - (b === NO_TYPE) || (known.indexOf(a) + 1 || 99) - (known.indexOf(b) + 1 || 99) || a.localeCompare(b));
+  renderSlicer("month-chips", pickedMonths, months, monthName);
+  renderSlicer("type-chips", pickedTypes, types, (key) => key === NO_TYPE ? "No type" : key);
+}
+
+// ---- Bar chart: total per purchase month, for the orders that pass search + job type. ----
+// Every month between the first and last purchase gets a bar (0 if none), so gaps show.
+function monthRange(keys) {
+  if (!keys.length) return [];
+  const [first, last] = [keys[0], keys[keys.length - 1]].map((k) => k.split("-").map(Number));
+  const out = [];
+  for (let y = first[0], m = first[1]; y < last[0] || (y === last[0] && m <= last[1]); m === 12 ? (y++, m = 1) : m++) {
+    out.push(`${y}-${String(m).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+function niceMax(value) {
+  if (value <= 0) return 100;
+  const step = 10 ** Math.floor(Math.log10(value));
+  return [1, 2, 2.5, 5, 10].map((f) => f * step).find((v) => v >= value);
+}
+
+function renderChart(base) {
+  const totals = new Map(), counts = new Map();
+  for (const o of base) {
+    const key = monthOf(o);
+    if (key === NO_DATE) continue;
+    totals.set(key, (totals.get(key) || 0) + o.total_cents);
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  const months = monthRange([...new Set(orders.map(monthOf))].filter((k) => k !== NO_DATE).sort());
+  const undated = base.filter((o) => monthOf(o) === NO_DATE).length;
+  $("chart-note").textContent = [
+    pickedMonths.size ? "Click a bar to add or remove its month" : "Click a bar to filter to that month",
+    undated ? `${undated} order${undated === 1 ? "" : "s"} with no purchase date not shown` : "",
+  ].filter(Boolean).join(" · ");
+
+  const svgNS = "http://www.w3.org/2000/svg";
+  const node = (tag, attrs = {}) => {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    return n;
+  };
+  if (!months.length) {
+    $("chart").replaceChildren(el("p", { className: "chart-note", textContent: "No purchase dates yet, so there is nothing to chart." }));
+    return;
+  }
+  const width = Math.max($("chart").clientWidth, 320), height = 190;
+  const left = 58, right = 6, top = 10, bottom = 24;
+  const plotW = width - left - right, plotH = height - top - bottom;
+  const max = niceMax(Math.max(0, ...totals.values()) / 100);
+  const y = (dollars) => top + plotH - (dollars / max) * plotH;
+  const slot = plotW / months.length;
+  const barW = Math.max(4, Math.min(48, slot - 2 - slot * 0.25));  // At least a 2px gap between bars.
+  const svg = node("svg", { viewBox: `0 0 ${width} ${height}`, role: "img",
+    "aria-label": `Spend by purchase month, ${monthName(months[0])} to ${monthName(months[months.length - 1])}` });
+
+  for (let i = 0; i <= 4; i++) {  // Recessive gridlines with dollar labels.
+    const value = (max / 4) * i, gy = y(value);
+    svg.append(node("line", { class: "grid", x1: left, x2: width - right, y1: gy, y2: gy }));
+    const label = node("text", { class: "axis-text", x: left - 8, y: gy + 4, "text-anchor": "end" });
+    label.textContent = value >= 1000 ? `$${(value / 1000).toLocaleString("en-US", { maximumFractionDigits: 1 })}k` : `$${value}`;
+    svg.append(label);
+  }
+
+  const labelEvery = Math.ceil(months.length / Math.max(1, Math.floor(plotW / 54)));
+  const tip = $("chart-tip");
+  months.forEach((key, i) => {
+    const cents = totals.get(key) || 0, n = counts.get(key) || 0;
+    const cx = left + slot * i + slot / 2;
+    const top_ = y(cents / 100), h = top + plotH - top_;
+    const dim = pickedMonths.size > 0 && !pickedMonths.has(key);
+    const label = `${monthName(key)}: ${money(cents)}, ${n} order${n === 1 ? "" : "s"}`;
+
+    const hit = node("rect", { class: "hit", x: left + slot * i, y: top, width: slot, height: plotH + 4, tabindex: 0, role: "button", "aria-label": label, "aria-pressed": pickedMonths.has(key) });
+    const showTip = () => {
+      tip.replaceChildren(el("strong", { textContent: money(cents) }), `${monthName(key)} · ${n} order${n === 1 ? "" : "s"}`);
+      tip.style.left = `${14 + (cx / width) * $("chart").clientWidth}px`;
+      tip.style.top = `${12 + 18 + (Math.min(top_, top + plotH - 4) / height) * 190}px`;
+      tip.hidden = false;
+    };
+    hit.addEventListener("pointerenter", showTip);
+    hit.addEventListener("focus", showTip);
+    hit.addEventListener("pointerleave", () => { tip.hidden = true; });
+    hit.addEventListener("blur", () => { tip.hidden = true; });
+    const pick = () => { pickedMonths.has(key) ? pickedMonths.delete(key) : pickedMonths.add(key); render(); };
+    hit.addEventListener("click", pick);
+    hit.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } });
+    svg.append(hit);
+
+    if (h > 0) {  // Rounded 4px top, square at the baseline.
+      const r = Math.min(4, barW / 2, h), x0 = cx - barW / 2, x1 = cx + barW / 2, base = top + plotH;
+      svg.append(node("path", { class: `bar${dim ? " dim" : ""}`,
+        d: `M${x0},${base} V${top_ + r} Q${x0},${top_} ${x0 + r},${top_} H${x1 - r} Q${x1},${top_} ${x1},${top_ + r} V${base} Z` }));
+    } else {
+      svg.append(node("g"));  // Keeps hit + bar pairs adjacent for the hover style.
+    }
+
+    if (i % labelEvery === 0 || i === months.length - 1 && months.length <= 3) {
+      const [yy, mm] = key.split("-");
+      const text = node("text", { class: "axis-text", x: cx, y: height - 6, "text-anchor": "middle" });
+      text.textContent = i === 0 || mm === "01" ? `${monthName(key, false)} ${yy.slice(2)}` : monthName(key, false);
+      svg.append(text);
+    }
+  });
+  svg.append(node("line", { x1: left, x2: width - right, y1: top + plotH, y2: top + plotH, stroke: "#c9ced4" }));
+  tip.hidden = true;
+  $("chart").replaceChildren(svg);
+}
+
 function render() {
   const query = $("search").value.trim().toLowerCase();
-  const visible = orders.filter((order) => matches(order, query));
+  // Search and job type scope the chart; the month slicer then picks bars and rows.
+  const base = orders.filter((o) => matches(o, query) && (!pickedTypes.size || pickedTypes.has(typeOf(o))));
+  const visible = sortByDue(base.filter((o) => !pickedMonths.size || pickedMonths.has(monthOf(o))));
+  renderSlicers();
+  renderChart(base);
   const rows = [];
   for (const order of visible) {
     const isOpen = open.has(order.order_id);
@@ -403,6 +660,7 @@ function render() {
       el("td", { textContent: order.order_id, className: "order-id" }),
       el("td", { textContent: order.job_name }),
       el("td", {}, memoInput(order)),
+      jobTypeCell(order),
       el("td", { textContent: order.items.length, className: "num" }),
       el("td", { textContent: money(order.total_cents), className: "num" }),
       el("td", {
@@ -419,10 +677,12 @@ function render() {
     }
   }
   $("rows").replaceChildren(...rows);
-  $("summary").textContent = `${visible.length} ${visible.length === 1 ? "order" : "orders"}, ${money(visible.reduce((sum, o) => sum + o.total_cents, 0))}`;
+  $("summary").replaceChildren(
+    el("strong", { textContent: visible.length }), ` ${visible.length === 1 ? "order" : "orders"} · `,
+    el("strong", { textContent: money(visible.reduce((sum, o) => sum + o.total_cents, 0)) }));
   $("empty").hidden = visible.length > 0;
   $("empty").textContent = orders.length
-    ? "No orders match your search."
+    ? "No orders match your search and filters."
     : PAID
       ? "No paid invoices yet. Use Mark paid on the invoice list to move an invoice here."
       : "No unpaid invoices. Use Scrape invoices to sign in to F.W. Webb and download new ones.";
@@ -517,6 +777,8 @@ $("file").addEventListener("change", async (event) => {
 });
 
 $("search").addEventListener("input", render);
+let resizeTimer;
+window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(render, 150); });
 setUpMode();
 if (PAID) load();
 else pollScrape().catch((e) => showMessage(e.message));

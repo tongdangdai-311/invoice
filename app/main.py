@@ -236,7 +236,8 @@ def update_due_date(order_id: str, update: DueDateUpdate) -> dict:
 def update_memo(order_id: str, update: MemoUpdate) -> dict:
     if not store.set_memo(order_id, update.memo.strip()):
         raise HTTPException(404, "Order not found")
-    return {"order_id": order_id, "memo": update.memo.strip()}
+    memo = update.memo.strip()
+    return {"order_id": order_id, "memo": memo, "job_type": store.job_type_of(memo)}
 
 
 @app.post("/api/import")

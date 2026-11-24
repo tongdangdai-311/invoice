@@ -4,7 +4,7 @@ import io
 import os
 import re
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -67,8 +67,26 @@ ADDED_COLUMNS = {
     "paid_by": "VARCHAR(100) NULL",
 }
 
-# Invoices are due this many days after the purchase date.
-PAYMENT_TERMS_DAYS = 60
+def due_date_for(purchased_on: date | None) -> date | None:
+    """Invoices are due on the last day of the month after the purchase:
+    bought Nov 11 -> due Dec 31; bought Jan 31 -> due Feb 28 (or 29)."""
+    if purchased_on is None:
+        return None
+    first_of_next = (purchased_on.replace(day=1) + timedelta(days=32)).replace(day=1)
+    return (first_of_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+
+
+# The trades Claude picks from. A memo ends with ": <job type>", e.g. "PVC drain piping: Plumbing".
+JOB_TYPES = ("Plumbing", "HVAC")
+
+
+def job_type_of(memo: str) -> str:
+    """Everything after the last ':' in the memo, trimmed; '' when there is no ':'.
+    'PVC drain piping: Plumbing' -> 'Plumbing'. Known types get their usual spelling
+    ('hvac' -> 'HVAC'); anything else typed after the ':' is kept as written."""
+    _, colon, after = (memo or "").rpartition(":")
+    job_type = after.strip() if colon else ""
+    return next((t for t in JOB_TYPES if t.lower() == job_type.lower()), job_type)
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -187,8 +205,9 @@ def save_orders(
 ) -> None:
     """Insert or refresh orders. A memo the user already wrote is never overwritten,
     and a known purchase date is kept when a CSV import has none. A missing due date
-    is filled in as the purchase date plus PAYMENT_TERMS_DAYS; one already set
+    is filled in from the purchase date (see due_date_for); one already set
     (including one typed in by hand) is kept."""
+    due_on = due_date_for(purchased_on)
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
     with _cursor() as cursor:
         for order in orders:
@@ -197,7 +216,7 @@ def save_orders(
                 INSERT INTO orders
                     (order_id, invoice_id, job_name, memo, total_cents, imported_at,
                      purchased_on, due_on)
-                VALUES (%s, %s, %s, '', %s, %s, %s, %s + INTERVAL %s DAY) AS new
+                VALUES (%s, %s, %s, '', %s, %s, %s, %s) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
@@ -207,8 +226,7 @@ def save_orders(
                 """,  # imported_at is left alone: it records when the order was first added.
                 (
                     order["order_id"], invoice_id, order["job_name"],
-                    order["total_cents"], now, purchased_on,
-                    purchased_on, PAYMENT_TERMS_DAYS,
+                    order["total_cents"], now, purchased_on, due_on,
                 ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
@@ -236,7 +254,10 @@ def list_orders(paid: bool = False) -> list[dict]:
         where, order_by = "paid_on IS NULL", "imported_at DESC, order_id DESC"
     with _cursor() as cursor:
         cursor.execute(f"SELECT * FROM orders WHERE {where} ORDER BY {order_by}")
-        orders = {row["order_id"]: {**row, "items": []} for row in cursor.fetchall()}
+        orders = {
+            row["order_id"]: {**row, "job_type": job_type_of(row["memo"]), "items": []}
+            for row in cursor.fetchall()
+        }
         cursor.execute(
             f"SELECT items.* FROM items JOIN orders USING (order_id) WHERE {where} ORDER BY items.id"
         )
@@ -252,7 +273,7 @@ def get_order(order_id: str) -> dict | None:
         if order is None:
             return None
         cursor.execute("SELECT * FROM items WHERE order_id = %s ORDER BY id", (order_id,))
-        return {**order, "items": cursor.fetchall()}
+        return {**order, "job_type": job_type_of(order["memo"]), "items": cursor.fetchall()}
 
 
 def set_due_date(order_id: str, due_on: date | None) -> bool:
