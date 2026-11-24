@@ -99,6 +99,22 @@ def due_date_for(purchased_on: date | None) -> date | None:
 # The trades Claude picks from. A memo ends with ": <job type>", e.g. "PVC drain piping: Plumbing".
 JOB_TYPES = ("Plumbing", "HVAC")
 
+# The regular jobs, for the Job slicer. A job name belongs to the first group with any of
+# its keywords in it (any capitals); everything else is "Other". Edit freely as names settle.
+JOB_GROUPS = (
+    ("Harvard Standish", ("STANDISH", "114 HARVARD")),   # 114 Harvard St is part of it.
+    ("Honan Apt", ("HONAN", "HONAM")),                    # "HONAM" is a typo seen on invoices.
+    ("40-42 Ashford", ("ASHFORD",)),
+    ("273 Highland", ("HIGHLAND",)),
+)
+OTHER_JOB = "Other"
+
+
+def job_group_of(job_name: str) -> str:
+    """'HARVARD STANDISH - PLUMBING MATERIALS' -> 'Harvard Standish'; unknown -> 'Other'."""
+    name = (job_name or "").upper()
+    return next((group for group, keywords in JOB_GROUPS if any(k in name for k in keywords)), OTHER_JOB)
+
 
 def job_type_of(memo: str) -> str:
     """Everything after the last ':' in the memo, trimmed; '' when there is no ':'.
@@ -306,7 +322,8 @@ def list_orders(paid: bool = False, draft: bool = False) -> list[dict]:
     with _cursor() as cursor:
         cursor.execute(f"SELECT * FROM orders WHERE {where} ORDER BY {order_by}")
         orders = {
-            row["order_id"]: {**row, "job_type": job_type_of(row["memo"]), "items": []}
+            row["order_id"]: {**row, "job_type": job_type_of(row["memo"]),
+                              "job_group": job_group_of(row["job_name"]), "items": []}
             for row in cursor.fetchall()
         }
         cursor.execute(
@@ -324,7 +341,8 @@ def get_order(order_id: str) -> dict | None:
         if order is None:
             return None
         cursor.execute("SELECT * FROM items WHERE order_id = %s ORDER BY id", (order_id,))
-        return {**order, "job_type": job_type_of(order["memo"]), "items": cursor.fetchall()}
+        return {**order, "job_type": job_type_of(order["memo"]),
+                "job_group": job_group_of(order["job_name"]), "items": cursor.fetchall()}
 
 
 def set_due_date(order_id: str, due_on: date | None) -> bool:

@@ -164,6 +164,7 @@
 
   <div class="slicers">
     <div class="slicer"><span class="slicer-label" id="month-label">Month</span><div id="month-chips" class="chips" role="group" aria-labelledby="month-label"></div></div>
+    <div class="slicer"><span class="slicer-label" id="job-label">Job</span><div id="job-chips" class="chips" role="group" aria-labelledby="job-label"></div></div>
     <div class="slicer"><span class="slicer-label" id="type-label">Job type</span><div id="type-chips" class="chips" role="group" aria-labelledby="type-label"></div></div>
   </div>
 
@@ -647,6 +648,8 @@ $("drafts-cancel").addEventListener("click", () => finishDrafts("discard"));
 // ---- Slicers: purchase month and job type. Empty set = no filter ("All"). ----
 const pickedMonths = new Set();
 const pickedTypes = new Set();
+const pickedJobs = new Set();
+const jobOf = (order) => order.job_group || "Other";  // Grouped on the server (store.JOB_GROUPS).
 const NO_DATE = "none", NO_TYPE = "none";
 const monthOf = (order) => order.purchased_on ? order.purchased_on.slice(0, 7) : NO_DATE;  // "2026-11"
 const typeOf = (order) => order.job_type || NO_TYPE;
@@ -675,6 +678,12 @@ function renderSlicer(boxId, picked, keys, labelOf) {
 function renderSlicers() {
   for (const key of pickedMonths) if (!orders.some((o) => monthOf(o) === key)) pickedMonths.delete(key);
   for (const key of pickedTypes) if (!orders.some((o) => typeOf(o) === key)) pickedTypes.delete(key);
+  for (const key of pickedJobs) if (!orders.some((o) => jobOf(o) === key)) pickedJobs.delete(key);
+  // Biggest jobs (by spend) first, "Other" last.
+  const spend = new Map();
+  for (const o of orders) spend.set(jobOf(o), (spend.get(jobOf(o)) || 0) + o.total_cents);
+  const jobs = [...spend.keys()].sort((a, b) => (a === "Other") - (b === "Other") || spend.get(b) - spend.get(a));
+  renderSlicer("job-chips", pickedJobs, jobs, (key) => key);
   const months = [...new Set(orders.map(monthOf))].sort((a, b) =>
     (a === NO_DATE) - (b === NO_DATE) || b.localeCompare(a));  // Newest month first, "No date" last.
   const known = ["Plumbing", "HVAC"];
@@ -793,7 +802,9 @@ function renderChart(base) {
 function render() {
   const query = $("search").value.trim().toLowerCase();
   // Search and job type scope the chart; the month slicer then picks bars and rows.
-  const base = orders.filter((o) => matches(o, query) && (!pickedTypes.size || pickedTypes.has(typeOf(o))));
+  const base = orders.filter((o) => matches(o, query)
+    && (!pickedTypes.size || pickedTypes.has(typeOf(o)))
+    && (!pickedJobs.size || pickedJobs.has(jobOf(o))));
   const visible = sortByDue(base.filter((o) => !pickedMonths.size || pickedMonths.has(monthOf(o))));
   renderSlicers();
   renderChart(base);
