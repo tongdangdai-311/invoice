@@ -100,6 +100,8 @@
   .memo-cell { display: flex; gap: 4px; align-items: center; }
   .suggest { flex: none; width: 26px; height: 26px; padding: 0; font-size: 13px; line-height: 1; color: var(--accent); }
   .suggest:hover:not(:disabled) { border-color: var(--accent); }
+  .picker { width: 100px; font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; }
+  .picker::placeholder { color: var(--muted); }
   .memo { width: 100%; min-width: 180px; font: inherit; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; }
   .items-row > td { background: #fafbfc; padding: 4px 12px 14px 40px; }
   .items th { font-size: 12px; color: var(--muted); }
@@ -161,6 +163,8 @@
   </div>
 </dialog>
 
+<datalist id="pickers"></datalist>
+
 <dialog id="pay-dialog" aria-labelledby="pay-title">
   <form id="pay-form" novalidate>
     <h2 id="pay-title">Mark order paid</h2>
@@ -187,7 +191,7 @@ let orders = [];
 const open = new Set();
 // The same page shows unpaid invoices at /fw-webb and paid ones at /fw-webb/paid.
 const PAID = location.pathname.replace(/\/$/, "").endsWith("/paid");
-const COLUMNS = ["", "Order ID", "Job name", "Memo", "Job type", "Items", "Total price", "Date purchased", "Due date",
+const COLUMNS = ["", "Order ID", "Job name", "Picked up by", "Memo", "Job type", "Items", "Total price", "Date purchased", "Due date",
   ...(PAID ? ["Card", "Paid by", "Date paid", ""] : [""])];
 
 function el(tag, props = {}, ...children) {
@@ -213,7 +217,7 @@ async function api(path, options) {
 }
 
 function matches(order, query) {
-  const haystack = [order.order_id, order.job_name, order.memo, order.job_type || "", order.paid_by || "",
+  const haystack = [order.order_id, order.job_name, order.picked_up_by || "", order.memo, order.job_type || "", order.paid_by || "",
     ...order.items.flatMap((i) => [i.product, i.description])].join(" ").toLowerCase();
   return haystack.includes(query);
 }
@@ -312,6 +316,35 @@ function showJobType(order) {
   cell.replaceChildren(type
     ? el("span", { className: `job-type ${KNOWN_JOB_TYPES.has(type) ? `job-type-${type.toLowerCase()}` : ""}`, textContent: type })
     : el("span", { className: "date", textContent: "—", title: 'End the memo with ": Plumbing" or ": HVAC"' }));
+}
+
+// Filled by the scraper only when the portal clearly names someone (e.g. "VU"); otherwise typed here.
+function pickedUpByInput(order) {
+  const input = el("input", { className: "picker", value: order.picked_up_by || "", placeholder: "—", maxLength: 100 });
+  input.setAttribute("aria-label", `Picked up by, order ${order.order_id}`);
+  input.setAttribute("list", "pickers");
+  input.addEventListener("change", async () => {
+    try {
+      const saved = await api(`/api/orders/${encodeURIComponent(order.order_id)}/picked-up-by`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ picked_up_by: input.value }),
+      });
+      order.picked_up_by = saved.picked_up_by;
+      input.value = saved.picked_up_by || "";
+      showPickers();
+      showMessage("");
+    } catch (error) {
+      input.value = order.picked_up_by || "";
+      showMessage(`"Picked up by" not saved for order ${order.order_id}: ${error.message}`);
+    }
+  });
+  return input;
+}
+// Names already used, offered as suggestions while typing.
+function showPickers() {
+  const names = [...new Set(orders.map((o) => o.picked_up_by).filter(Boolean))].sort();
+  $("pickers").replaceChildren(...names.map((name) => el("option", { value: name })));
 }
 
 function memoInput(order) {
@@ -659,6 +692,7 @@ function render() {
       el("td", {}, toggle),
       el("td", { textContent: order.order_id, className: "order-id" }),
       el("td", { textContent: order.job_name }),
+      el("td", {}, pickedUpByInput(order)),
       el("td", {}, memoInput(order)),
       jobTypeCell(order),
       el("td", { textContent: order.items.length, className: "num" }),
@@ -691,6 +725,7 @@ function render() {
 async function load() {
   try {
     orders = await api(`/api/orders?paid=${PAID}`);
+    showPickers();
     render();
   } catch (error) {
     showMessage(`Could not load invoices: ${error.message}`);

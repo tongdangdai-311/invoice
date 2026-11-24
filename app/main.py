@@ -95,6 +95,10 @@ class MemoUpdate(BaseModel):
     memo: str
 
 
+class PickedUpByUpdate(BaseModel):
+    picked_up_by: str = Field(max_length=100)
+
+
 class DueDateUpdate(BaseModel):
     due_on: date | None  # null clears it
 
@@ -230,6 +234,14 @@ def update_due_date(order_id: str, update: DueDateUpdate) -> dict:
     if not store.set_due_date(order_id, update.due_on):
         raise HTTPException(404, "Order not found")
     return {"order_id": order_id, "due_on": update.due_on}
+
+
+@app.patch("/api/orders/{order_id}/picked-up-by")
+def update_picked_up_by(order_id: str, update: PickedUpByUpdate) -> dict:
+    name = update.picked_up_by.strip()
+    if not store.set_picked_up_by(order_id, name):
+        raise HTTPException(404, "Order not found")
+    return {"order_id": order_id, "picked_up_by": name or None}
 
 
 @app.patch("/api/orders/{order_id}")

@@ -38,6 +38,7 @@ SCHEMA = (
         paid_on DATE NULL,
         paid_card CHAR(4) NULL,
         paid_by VARCHAR(100) NULL,
+        picked_up_by VARCHAR(100) NULL,
         INDEX idx_invoice_id (invoice_id)
     ) CHARACTER SET utf8mb4
     """,
@@ -65,6 +66,7 @@ ADDED_COLUMNS = {
     "paid_on": "DATE NULL",
     "paid_card": "CHAR(4) NULL",
     "paid_by": "VARCHAR(100) NULL",
+    "picked_up_by": "VARCHAR(100) NULL",
 }
 
 def due_date_for(purchased_on: date | None) -> date | None:
@@ -87,6 +89,19 @@ def job_type_of(memo: str) -> str:
     _, colon, after = (memo or "").rpartition(":")
     job_type = after.strip() if colon else ""
     return next((t for t in JOB_TYPES if t.lower() == job_type.lower()), job_type)
+
+
+def person_from_job_name(job_name: str, po: str = "") -> str:
+    """Who placed or picked up the order, when the portal's free-text "Job Name" box clearly holds a
+    name: one short word of letters ("VU") that isn't part of the PO/job text.
+    Anything unsure - blank, ".", site names like "HONAN APT ...", "273 HIGHLAND
+    STREET" - gives '' so the field stays empty for a person to fill in."""
+    word = (job_name or "").strip()
+    if not re.fullmatch(r"[A-Za-z]{2,12}", word):
+        return ""
+    if re.search(rf"\b{re.escape(word)}\b", po or "", re.IGNORECASE):
+        return ""  # e.g. Job Name "HONAN" on a "HONAN BUILDING B" order is the job, not a person.
+    return word.upper() if len(word) <= 3 else word.title()
 
 
 class DatabaseNotConfigured(RuntimeError):
@@ -178,11 +193,13 @@ def parse_csv(raw: bytes) -> list[dict]:
         if not order_id:
             continue
         order = orders.setdefault(
-            order_id, {"order_id": order_id, "job_name": "", "total_cents": 0, "items": []}
+            order_id,
+            {"order_id": order_id, "job_name": "", "picked_up_by": "", "total_cents": 0, "items": []},
         )
         # The portal puts the job in "PO"; "Jobname" is usually blank and can
         # hold a contact name instead, so it is only a fallback.
         order["job_name"] = order["job_name"] or get("po") or get("jobname")
+        order["picked_up_by"] = order["picked_up_by"] or person_from_job_name(get("jobname"), get("po"))
         ext_cents = _to_cents(get("ext. price"))
         order["total_cents"] += ext_cents
         order["items"].append(
@@ -201,12 +218,14 @@ def parse_csv(raw: bytes) -> list[dict]:
 
 
 def save_orders(
-    orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None
+    orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None,
+    picked_up_by: str = "",
 ) -> None:
     """Insert or refresh orders. A memo the user already wrote is never overwritten,
     and a known purchase date is kept when a CSV import has none. A missing due date
     is filled in from the purchase date (see due_date_for); one already set
-    (including one typed in by hand) is kept."""
+    (including one typed in by hand) is kept. Picked up by works the same way: filled
+    in when known, never overwriting a name already there."""
     due_on = due_date_for(purchased_on)
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
     with _cursor() as cursor:
@@ -215,18 +234,20 @@ def save_orders(
                 """
                 INSERT INTO orders
                     (order_id, invoice_id, job_name, memo, total_cents, imported_at,
-                     purchased_on, due_on)
-                VALUES (%s, %s, %s, '', %s, %s, %s, %s) AS new
+                     purchased_on, due_on, picked_up_by)
+                VALUES (%s, %s, %s, '', %s, %s, %s, %s, NULLIF(%s, '')) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
                     total_cents = new.total_cents,
                     purchased_on = COALESCE(new.purchased_on, orders.purchased_on),
-                    due_on = COALESCE(orders.due_on, new.due_on)
+                    due_on = COALESCE(orders.due_on, new.due_on),
+                    picked_up_by = COALESCE(orders.picked_up_by, new.picked_up_by)
                 """,  # imported_at is left alone: it records when the order was first added.
                 (
                     order["order_id"], invoice_id, order["job_name"],
                     order["total_cents"], now, purchased_on, due_on,
+                    picked_up_by or order.get("picked_up_by", ""),
                 ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
@@ -298,6 +319,23 @@ def mark_unpaid(order_id: str) -> bool:
             "UPDATE orders SET paid_on = NULL, paid_card = NULL, paid_by = NULL WHERE order_id = %s",
             (order_id,),
         ) > 0
+
+
+def set_picked_up_by(order_id: str, name: str) -> bool:
+    """Typed in on the page; '' clears it."""
+    with _cursor() as cursor:
+        return cursor.execute(
+            "UPDATE orders SET picked_up_by = NULLIF(%s, '') WHERE order_id = %s", (name, order_id)
+        ) > 0
+
+
+def fill_picked_up_by(invoice_id: str, name: str) -> int:
+    """Add a name to an invoice's orders that have none yet (for invoices saved before)."""
+    with _cursor() as cursor:
+        return cursor.execute(
+            "UPDATE orders SET picked_up_by = %s WHERE invoice_id = %s AND picked_up_by IS NULL",
+            (name, invoice_id),
+        )
 
 
 def set_memo(order_id: str, memo: str) -> bool:
