@@ -20,6 +20,19 @@
   .mark-paid:hover, button.paid-confirm { background: var(--good); border-color: var(--good); color: #fff; }
   .card { font-variant-numeric: tabular-nums; white-space: nowrap; }
   .order-id { white-space: nowrap; }
+
+  /* Draft list: scraped invoices waiting for review. */
+  .drafts { background: #fff8ec; border: 1px solid #ecd3a6; border-radius: 8px; padding: 14px 16px 16px; margin: 0 0 22px; }
+  .drafts-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; justify-content: space-between; }
+  .drafts h2 { font-size: 17px; margin: 0; }
+  .drafts p { margin: 4px 0 12px; color: var(--muted); }
+  #drafts-summary { color: var(--muted); font-variant-numeric: tabular-nums; }
+  #drafts-summary strong { color: var(--ink); }
+  .drafts-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 12px; }
+  .who { display: flex; align-items: center; gap: 8px; margin-right: auto; font-size: 13px; font-weight: 600; color: var(--muted); }
+  .who input { font: inherit; font-weight: 400; color: var(--ink); padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; width: 180px; }
+  .remove { padding: 3px 10px; font-size: 13px; white-space: nowrap; }
+  .remove:hover { border-color: var(--bad); color: var(--bad); }
   .sort-btn { margin-left: 6px; padding: 0 5px; font-size: 10px; line-height: 18px; color: var(--muted); border-color: transparent; background: none; vertical-align: 1px; }
   .sort-btn:hover { border-color: var(--line); color: var(--ink); }
   .sort-btn.active { color: var(--accent); border-color: var(--accent); background: #fff; }
@@ -116,6 +129,7 @@
     <div class="title">
       <h1 id="title">F.W. Webb Invoices</h1>
       <a id="paid-link" class="link-btn" href="/fw-webb/paid">Paid invoices</a>
+      <a id="log-link" class="link-btn" href="/fw-webb/log">Import log</a>
     </div>
     <label id="import" class="file-btn"><span id="file-label">Import CSV</span><input id="file" type="file" accept=".csv,.txt,text/csv"></label>
     <button id="scrape" class="primary">Scrape invoices</button>
@@ -123,6 +137,25 @@
 
   <pre id="log" aria-live="polite"></pre>
   <p id="message" role="alert"></p>
+
+  <section id="drafts" class="drafts" hidden aria-labelledby="drafts-title">
+    <div class="drafts-head">
+      <h2 id="drafts-title">Review scraped invoices</h2>
+      <span id="drafts-summary"></span>
+    </div>
+    <p>These aren't in your invoice list yet. Check and edit them, remove any you don't want, then click Add.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="draft-head"></tr></thead>
+        <tbody id="draft-rows"></tbody>
+      </table>
+    </div>
+    <div class="drafts-actions">
+      <label class="who">Your name <input id="drafts-name" maxlength="100" autocomplete="name" placeholder="Who's adding these"></label>
+      <button id="drafts-cancel" type="button">Cancel</button>
+      <button id="drafts-add" type="button" class="primary">Add</button>
+    </div>
+  </section>
 
   <div class="toolbar">
     <input id="search" type="search" placeholder="Search order, job, memo or item" aria-label="Search invoices">
@@ -188,6 +221,7 @@
 const $ = (id) => document.getElementById(id);
 const money = (cents) => (cents / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
 let orders = [];
+let drafts = [];  // Scraped invoices waiting for review (unpaid list only).
 const open = new Set();
 // The same page shows unpaid invoices at /fw-webb and paid ones at /fw-webb/paid.
 const PAID = location.pathname.replace(/\/$/, "").endsWith("/paid");
@@ -343,7 +377,7 @@ function pickedUpByInput(order) {
 }
 // Names already used, offered as suggestions while typing.
 function showPickers() {
-  const names = [...new Set(orders.map((o) => o.picked_up_by).filter(Boolean))].sort();
+  const names = [...new Set([...orders, ...drafts].map((o) => o.picked_up_by).filter(Boolean))].sort();
   $("pickers").replaceChildren(...names.map((name) => el("option", { value: name })));
 }
 
@@ -514,6 +548,8 @@ function setUpMode() {
     if (name === "Due date") th.append(dueSortButton());
     return th;
   }));
+  $("draft-head").replaceChildren(...DRAFT_COLUMNS.map((name) => el("th", {
+    textContent: name, className: name === "Items" || name === "Total price" ? "num" : name === "Date purchased" ? "date-col" : "" })));
   if (!PAID) return;
   document.body.classList.add("paid");
   document.title = "F.W. Webb Paid Invoices";
@@ -521,10 +557,92 @@ function setUpMode() {
   $("back").href = "/fw-webb";
   $("back").textContent = "← Invoice list";
   $("paid-link").hidden = true;
+  $("log-link").hidden = true;
   $("import").hidden = true;
   $("scrape").hidden = true;
   $("search").placeholder = "Search order, job, memo, item or who paid";
 }
+
+// ---- Draft list ----
+const DRAFT_COLUMNS = ["", "Order ID", "Job name", "Picked up by", "Memo", "Job type", "Items", "Total price", "Date purchased", "Due date", ""];
+
+function renderDrafts() {
+  $("drafts").hidden = PAID || drafts.length === 0;
+  if ($("drafts").hidden) return;
+  const total = drafts.reduce((sum, o) => sum + o.total_cents, 0);
+  $("drafts-summary").replaceChildren(
+    el("strong", { textContent: drafts.length }), ` ${drafts.length === 1 ? "invoice" : "invoices"} · `,
+    el("strong", { textContent: money(total) }));
+  $("drafts-add").textContent = `Add ${drafts.length} ${drafts.length === 1 ? "invoice" : "invoices"}`;
+  const rows = [];
+  for (const order of drafts) {
+    const isOpen = open.has(order.order_id);
+    const toggle = el("button", { className: "toggle", textContent: isOpen ? "Hide" : "Items" });
+    toggle.setAttribute("aria-expanded", isOpen);
+    toggle.addEventListener("click", () => { isOpen ? open.delete(order.order_id) : open.add(order.order_id); render(); });
+    const remove = el("button", { className: "remove", textContent: "Remove" });
+    remove.setAttribute("aria-label", `Remove order ${order.order_id} from the draft list`);
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      try {
+        await api(`/api/drafts/${encodeURIComponent(order.order_id)}`, { method: "DELETE" });
+        drafts = drafts.filter((o) => o !== order);
+        render();
+        showMessage(`Removed order ${order.order_id} from the draft list. The next scrape will offer it again.`, true);
+      } catch (error) {
+        remove.disabled = false;
+        showMessage(`Could not remove order ${order.order_id}: ${error.message}`);
+      }
+    });
+    rows.push(el("tr", {},
+      el("td", {}, toggle),
+      el("td", { textContent: order.order_id, className: "order-id" }),
+      el("td", { textContent: order.job_name }),
+      el("td", {}, pickedUpByInput(order)),
+      el("td", {}, memoInput(order)),
+      jobTypeCell(order),
+      el("td", { textContent: order.items.length, className: "num" }),
+      el("td", { textContent: money(order.total_cents), className: "num" }),
+      el("td", { textContent: order.purchased_on ? formatDay(order.purchased_on) : "—", className: "date" }),
+      dueDateCell(order),
+      el("td", {}, remove)));
+    if (isOpen) rows.push(el("tr", { className: "items-row" }, el("td", { colSpan: DRAFT_COLUMNS.length }, itemsTable(order))));
+  }
+  $("draft-rows").replaceChildren(...rows);
+}
+
+// Who is using the app, remembered on this computer (the app has one shared password).
+function myName() { try { return localStorage.getItem("myName") || ""; } catch { return ""; } }
+function rememberName(name) { try { localStorage.setItem("myName", name); } catch {} }
+$("drafts-name").value = myName();
+
+async function finishDrafts(action) {
+  const count = drafts.length;
+  const name = $("drafts-name").value.trim();
+  if (action === "add" && !name) {
+    showMessage("Enter your name next to Add, so the import log shows who added these.");
+    $("drafts-name").focus();
+    return;
+  }
+  if (action === "add") rememberName(name);
+  if (action === "discard" && !confirm(`Throw away all ${count} draft ${count === 1 ? "invoice" : "invoices"}? The next scrape will offer them again.`)) return;
+  $("drafts-add").disabled = $("drafts-cancel").disabled = true;
+  try {
+    await api(`/api/drafts/${action}`, action === "add"
+      ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) }
+      : { method: "POST" });
+    await load();
+    showMessage(action === "add"
+      ? `Added ${count} ${count === 1 ? "invoice" : "invoices"} to your invoice list. You can undo this in the Import log.`
+      : `Cancelled: ${count} draft ${count === 1 ? "invoice was" : "invoices were"} thrown away.`, true);
+  } catch (error) {
+    showMessage(`Could not ${action === "add" ? "add" : "cancel"} the drafts: ${error.message}`);
+  } finally {
+    $("drafts-add").disabled = $("drafts-cancel").disabled = false;
+  }
+}
+$("drafts-add").addEventListener("click", () => finishDrafts("add"));
+$("drafts-cancel").addEventListener("click", () => finishDrafts("discard"));
 
 // ---- Slicers: purchase month and job type. Empty set = no filter ("All"). ----
 const pickedMonths = new Set();
@@ -679,6 +797,7 @@ function render() {
   const visible = sortByDue(base.filter((o) => !pickedMonths.size || pickedMonths.has(monthOf(o))));
   renderSlicers();
   renderChart(base);
+  renderDrafts();
   const rows = [];
   for (const order of visible) {
     const isOpen = open.has(order.order_id);
@@ -724,7 +843,10 @@ function render() {
 
 async function load() {
   try {
-    orders = await api(`/api/orders?paid=${PAID}`);
+    [orders, drafts] = await Promise.all([
+      api(`/api/orders?paid=${PAID}`),
+      PAID ? Promise.resolve([]) : api("/api/orders?draft=true"),
+    ]);
     showPickers();
     render();
   } catch (error) {
@@ -792,6 +914,7 @@ $("file").addEventListener("change", async (event) => {
   if (!file) return;
   const form = new FormData();
   form.append("file", file);
+  form.append("added_by", myName());
   const existing = new Set(orders.map((order) => order.order_id));
   $("file").disabled = true;
   $("file-label").textContent = "Importing...";

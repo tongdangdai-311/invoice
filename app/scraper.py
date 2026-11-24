@@ -194,7 +194,9 @@ def download_invoice(page, invoice_id: str, picked_up_by: str = "") -> None:
     target = DATA_DIR / "downloads" / f"{invoice_id}.csv"
     download_info.value.save_as(target)
     orders = parse_csv(target.read_bytes())
-    save_orders(orders, invoice_id=invoice_id, purchased_on=purchased_on, picked_up_by=picked_up_by)
+    # Saved as drafts: they wait in the app's draft list until you check them and click Add.
+    save_orders(orders, invoice_id=invoice_id, purchased_on=purchased_on,
+                picked_up_by=picked_up_by, draft=True)
     for order in orders:
         log(f"  {invoice_id}: order {order['order_id']}, {len(order['items'])} items, "
             f"${order['total_cents'] / 100:,.2f}, job: {order['job_name'] or '(none)'}, "
@@ -237,7 +239,9 @@ def scrape() -> int:
                     failed.append(invoice_id)
                     log(f"  {invoice_id}: FAILED, {str(error).splitlines()[0]}")
 
-            log(f"Done. Saved {len(new_ids) - len(failed)}, failed {len(failed)}.")
+            saved = len(new_ids) - len(failed)
+            log(f"Done. {saved} new invoice{'' if saved == 1 else 's'} in the draft list "
+                f"for review, failed {len(failed)}.")
             return 1 if failed else 0
         finally:
             context.close()

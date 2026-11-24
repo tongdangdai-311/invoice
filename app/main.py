@@ -95,6 +95,10 @@ class MemoUpdate(BaseModel):
     memo: str
 
 
+class Who(BaseModel):
+    name: str = Field(min_length=1, max_length=100)  # Who clicked Add / Undo, for the import log.
+
+
 class PickedUpByUpdate(BaseModel):
     picked_up_by: str = Field(max_length=100)
 
@@ -189,14 +193,57 @@ def fw_webb() -> FileResponse:
     return FileResponse(FRONTEND / "fw_webb.html")
 
 
+@app.get("/fw-webb/log", include_in_schema=False)
+def import_log_page() -> FileResponse:
+    return FileResponse(FRONTEND / "import_log.html")
+
+
 @app.get("/fw-webb/paid", include_in_schema=False)
 def fw_webb_paid() -> FileResponse:
     return FileResponse(FRONTEND / "fw_webb.html")  # Same page; it switches to paid mode by URL.
 
 
 @app.get("/api/orders")
-def get_orders(paid: bool = False) -> list[dict]:
-    return store.list_orders(paid)
+def get_orders(paid: bool = False, draft: bool = False) -> list[dict]:
+    return store.list_orders(paid, draft)
+
+
+@app.delete("/api/drafts/{order_id}")
+def remove_draft(order_id: str) -> dict:
+    if not store.remove_draft(order_id):
+        raise HTTPException(404, "Draft not found")
+    return {"removed": order_id}
+
+
+@app.post("/api/drafts/add")
+def add_drafts(who: Who) -> dict:
+    name = who.name.strip()
+    if not name:
+        raise HTTPException(400, "Enter your name")
+    return {"added": store.add_drafts(name)}
+
+
+@app.get("/api/import-log")
+def import_log() -> list[dict]:
+    return store.list_batches()
+
+
+@app.get("/api/import-log/{batch_id}/orders")
+def import_log_orders(batch_id: int) -> list[dict]:
+    return store.batch_orders(batch_id)
+
+
+@app.post("/api/import-log/{batch_id}/undo")
+def undo_import(batch_id: int, who: Who) -> dict:
+    removed = store.undo_batch(batch_id, who.name.strip())
+    if removed is None:
+        raise HTTPException(409, "This import was already undone, or doesn't exist")
+    return {"removed": removed}
+
+
+@app.post("/api/drafts/discard")
+def discard_drafts() -> dict:
+    return {"discarded": store.discard_drafts()}
 
 
 @app.put("/api/orders/{order_id}/payment")
@@ -253,12 +300,13 @@ def update_memo(order_id: str, update: MemoUpdate) -> dict:
 
 
 @app.post("/api/import")
-def import_csv(file: UploadFile) -> dict:
+def import_csv(file: UploadFile, added_by: str = Form("")) -> dict:
     try:
         orders = store.parse_csv(file.file.read())
     except ValueError as error:
         raise HTTPException(400, str(error)) from None
-    store.save_orders(orders)
+    new_ids = store.save_orders(orders)
+    store.log_csv_import(new_ids, added_by.strip()[:100])
     return {
         "imported": [
             {

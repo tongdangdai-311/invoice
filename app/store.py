@@ -39,7 +39,21 @@ SCHEMA = (
         paid_card CHAR(4) NULL,
         paid_by VARCHAR(100) NULL,
         picked_up_by VARCHAR(100) NULL,
+        draft TINYINT(1) NOT NULL DEFAULT 0,
+        batch_id BIGINT NULL,
         INDEX idx_invoice_id (invoice_id)
+    ) CHARACTER SET utf8mb4
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS import_batches (
+        id            BIGINT AUTO_INCREMENT PRIMARY KEY,
+        created_at    DATETIME NOT NULL,
+        added_by      VARCHAR(100) NOT NULL DEFAULT '',
+        source        VARCHAR(16) NOT NULL,
+        invoice_count INT NOT NULL,
+        total_cents   BIGINT NOT NULL,
+        undone_at     DATETIME NULL,
+        undone_by     VARCHAR(100) NULL
     ) CHARACTER SET utf8mb4
     """,
     """
@@ -67,6 +81,10 @@ ADDED_COLUMNS = {
     "paid_card": "CHAR(4) NULL",
     "paid_by": "VARCHAR(100) NULL",
     "picked_up_by": "VARCHAR(100) NULL",
+    # 1 = scraped but not reviewed yet: shown only in the draft list until you Add it.
+    "draft": "TINYINT(1) NOT NULL DEFAULT 0",
+    # The import log entry (import_batches.id) that added this order; Undo removes by it.
+    "batch_id": "BIGINT NULL",
 }
 
 def due_date_for(purchased_on: date | None) -> date | None:
@@ -219,23 +237,29 @@ def parse_csv(raw: bytes) -> list[dict]:
 
 def save_orders(
     orders: list[dict], invoice_id: str | None = None, purchased_on: date | None = None,
-    picked_up_by: str = "",
-) -> None:
+    picked_up_by: str = "", draft: bool = False,
+) -> list[str]:
     """Insert or refresh orders. A memo the user already wrote is never overwritten,
     and a known purchase date is kept when a CSV import has none. A missing due date
     is filled in from the purchase date (see due_date_for); one already set
     (including one typed in by hand) is kept. Picked up by works the same way: filled
-    in when known, never overwriting a name already there."""
+    in when known, never overwriting a name already there. With draft=True new orders
+    wait in the draft list; an order that's already there keeps its draft/added state.
+    Returns the ids of the orders that were new (not refreshed), for the import log."""
     due_on = due_date_for(purchased_on)
     now = datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+    new_ids = []
     with _cursor() as cursor:
         for order in orders:
+            cursor.execute("SELECT 1 FROM orders WHERE order_id = %s", (order["order_id"],))
+            if not cursor.fetchone():
+                new_ids.append(order["order_id"])
             cursor.execute(
                 """
                 INSERT INTO orders
                     (order_id, invoice_id, job_name, memo, total_cents, imported_at,
-                     purchased_on, due_on, picked_up_by)
-                VALUES (%s, %s, %s, '', %s, %s, %s, %s, NULLIF(%s, '')) AS new
+                     purchased_on, due_on, picked_up_by, draft)
+                VALUES (%s, %s, %s, '', %s, %s, %s, %s, NULLIF(%s, ''), %s) AS new
                 ON DUPLICATE KEY UPDATE
                     invoice_id = COALESCE(new.invoice_id, orders.invoice_id),
                     job_name = new.job_name,
@@ -247,7 +271,7 @@ def save_orders(
                 (
                     order["order_id"], invoice_id, order["job_name"],
                     order["total_cents"], now, purchased_on, due_on,
-                    picked_up_by or order.get("picked_up_by", ""),
+                    picked_up_by or order.get("picked_up_by", ""), int(draft),
                 ),
             )
             cursor.execute("DELETE FROM items WHERE order_id = %s", (order["order_id"],))
@@ -259,20 +283,26 @@ def save_orders(
                 """,
                 [{**item, "order_id": order["order_id"]} for item in order["items"]],
             )
+    return new_ids
 
 
 def known_invoice_ids() -> set[str]:
+    """Invoices already added or waiting in the draft list (so they aren't downloaded again).
+    One removed from the draft list is gone, so the next scrape offers it again."""
     with _cursor() as cursor:
         cursor.execute("SELECT invoice_id FROM orders WHERE invoice_id IS NOT NULL")
         return {row["invoice_id"] for row in cursor.fetchall()}
 
 
-def list_orders(paid: bool = False) -> list[dict]:
-    """Unpaid orders, newest first; or paid ones, most recently paid first."""
-    if paid:
-        where, order_by = "paid_on IS NOT NULL", "paid_on DESC, order_id DESC"
+def list_orders(paid: bool = False, draft: bool = False) -> list[dict]:
+    """Unpaid orders, newest first; paid ones, most recently paid first; or drafts
+    (scraped, waiting for review). Drafts never appear in the other two lists."""
+    if draft:
+        where, order_by = "draft = 1", "imported_at DESC, order_id DESC"
+    elif paid:
+        where, order_by = "draft = 0 AND paid_on IS NOT NULL", "paid_on DESC, order_id DESC"
     else:
-        where, order_by = "paid_on IS NULL", "imported_at DESC, order_id DESC"
+        where, order_by = "draft = 0 AND paid_on IS NULL", "imported_at DESC, order_id DESC"
     with _cursor() as cursor:
         cursor.execute(f"SELECT * FROM orders WHERE {where} ORDER BY {order_by}")
         orders = {
@@ -319,6 +349,97 @@ def mark_unpaid(order_id: str) -> bool:
             "UPDATE orders SET paid_on = NULL, paid_card = NULL, paid_by = NULL WHERE order_id = %s",
             (order_id,),
         ) > 0
+
+
+def remove_draft(order_id: str) -> bool:
+    """Delete one draft order (its items go too). Added orders can't be removed here."""
+    with _cursor() as cursor:
+        return cursor.execute("DELETE FROM orders WHERE order_id = %s AND draft = 1", (order_id,)) > 0
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc).replace(microsecond=0, tzinfo=None)
+
+
+def _new_batch(cursor, added_by: str, source: str, order_ids: list[str]) -> int | None:
+    """Write an import log entry for these orders and tag them with it."""
+    if not order_ids:
+        return None
+    marks = ", ".join(["%s"] * len(order_ids))
+    cursor.execute(f"SELECT COALESCE(SUM(total_cents), 0) AS total FROM orders WHERE order_id IN ({marks})", order_ids)
+    total = cursor.fetchone()["total"]
+    cursor.execute(
+        "INSERT INTO import_batches (created_at, added_by, source, invoice_count, total_cents) "
+        "VALUES (%s, %s, %s, %s, %s)",
+        (_utc_now(), added_by, source, len(order_ids), total),
+    )
+    batch_id = cursor.lastrowid
+    cursor.execute(f"UPDATE orders SET batch_id = %s WHERE order_id IN ({marks})", [batch_id, *order_ids])
+    return batch_id
+
+
+def add_drafts(added_by: str) -> int:
+    """Move every draft into the invoice list, as one import log entry."""
+    with _cursor() as cursor:
+        cursor.execute("SELECT order_id FROM orders WHERE draft = 1")
+        order_ids = [row["order_id"] for row in cursor.fetchall()]
+        _new_batch(cursor, added_by, "scrape", order_ids)
+        cursor.execute("UPDATE orders SET draft = 0 WHERE draft = 1")
+        return len(order_ids)
+
+
+def log_csv_import(order_ids: list[str], added_by: str) -> None:
+    """A CSV import goes straight into the list; log the orders it added (not ones it refreshed)."""
+    with _cursor() as cursor:
+        _new_batch(cursor, added_by, "csv", order_ids)
+
+
+def list_batches() -> list[dict]:
+    """Import log, newest first, with how many of each batch are still there / paid now."""
+    with _cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT b.*, COUNT(o.order_id) AS still_there,
+                   COALESCE(SUM(o.paid_on IS NOT NULL), 0) AS paid_now
+            FROM import_batches b LEFT JOIN orders o ON o.batch_id = b.id
+            GROUP BY b.id ORDER BY b.created_at DESC, b.id DESC
+            """
+        )
+        # SUM() comes back as a Decimal, which would reach the page as the string "0".
+        return [{**row, "still_there": int(row["still_there"]), "paid_now": int(row["paid_now"])}
+                for row in cursor.fetchall()]
+
+
+def batch_orders(batch_id: int) -> list[dict]:
+    """The invoices one import added that are still here (Undo deletes them)."""
+    with _cursor() as cursor:
+        cursor.execute(
+            "SELECT order_id, invoice_id, job_name, total_cents, purchased_on, due_on, paid_on "
+            "FROM orders WHERE batch_id = %s ORDER BY purchased_on DESC, order_id DESC",
+            (batch_id,),
+        )
+        return cursor.fetchall()
+
+
+def undo_batch(batch_id: int, undone_by: str) -> int | None:
+    """Remove every invoice an import added (paid ones too). None if already undone/unknown."""
+    with _cursor() as cursor:
+        cursor.execute("SELECT undone_at FROM import_batches WHERE id = %s", (batch_id,))
+        row = cursor.fetchone()
+        if row is None or row["undone_at"] is not None:
+            return None
+        removed = cursor.execute("DELETE FROM orders WHERE batch_id = %s", (batch_id,))
+        cursor.execute(
+            "UPDATE import_batches SET undone_at = %s, undone_by = %s WHERE id = %s",
+            (_utc_now(), undone_by, batch_id),
+        )
+        return removed
+
+
+def discard_drafts() -> int:
+    """Throw away every draft."""
+    with _cursor() as cursor:
+        return cursor.execute("DELETE FROM orders WHERE draft = 1")
 
 
 def set_picked_up_by(order_id: str, name: str) -> bool:
